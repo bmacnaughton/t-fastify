@@ -1,0 +1,18 @@
+{
+  "name": "t-fastify",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "ajv": "^8.0.5",
+    "ajv-formats": "^2.0.2",
+    "fastify": "^3.14.1",
+    "json-schema-traverse": "^0.4.1"
+  }
+}
