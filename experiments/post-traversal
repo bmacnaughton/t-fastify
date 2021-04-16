@@ -1,0 +1,35 @@
+post-traversal
+/properties/someKey: { type: 'string' }
+/properties/someOtherKey: { type: 'number' }
+/properties/requiredKey/items: { type: 'integer' }
+/properties/requiredKey: { type: 'array', maxItems: 3, items: { type: 'integer' } }
+/properties/nullableKey: { type: [ 'number', 'null' ] }
+/properties/multipleTypesKey: { type: [ 'boolean', 'number' ] }
+/properties/multipleRestrictedTypesKey/oneOf/0: { type: 'string', maxLength: 5 }
+/properties/multipleRestrictedTypesKey/oneOf/1: { type: 'number', minimum: 10 }
+/properties/multipleRestrictedTypesKey: {
+  oneOf: [ { type: 'string', maxLength: 5 }, { type: 'number', minimum: 10 } ]
+}
+/properties/enumKey: { type: 'string', enum: [ 'John', 'Foo' ] }
+/properties/notTypeKey/not: { type: 'array' }
+/properties/notTypeKey: { not: { type: 'array' } }
+/properties/addresses: { '$ref': 'addressSchema' }
+rootSchema [ '$id', 'type', 'required', 'properties' ]
+
+pre-traversal
+rootSchema [ '$id', 'type', 'required', 'properties' ]
+/properties/someKey: { type: 'string' }
+/properties/someOtherKey: { type: 'number' }
+/properties/requiredKey: { type: 'array', maxItems: 3, items: { type: 'integer' } }
+/properties/requiredKey/items: { type: 'integer' }
+/properties/nullableKey: { type: [ 'number', 'null' ] }
+/properties/multipleTypesKey: { type: [ 'boolean', 'number' ] }
+/properties/multipleRestrictedTypesKey: {
+  oneOf: [ { type: 'string', maxLength: 5 }, { type: 'number', minimum: 10 } ]
+}
+/properties/multipleRestrictedTypesKey/oneOf/0: { type: 'string', maxLength: 5 }
+/properties/multipleRestrictedTypesKey/oneOf/1: { type: 'number', minimum: 10 }
+/properties/enumKey: { type: 'string', enum: [ 'John', 'Foo' ] }
+/properties/notTypeKey: { not: { type: 'array' } }
+/properties/notTypeKey/not: { type: 'array' }
+/properties/addresses: { '$ref': 'addressSchema' }

@@ -17,6 +17,8 @@ const opts = {
 // test with something like:
 // curl -H 'Content-type: application/json' -X POST -d '["bruce", "1954-04-22", "xyzz@23"]' localhost:3000/array
 // varying the elements of the array to generate errors or not.
+// or
+// curl -H 'Content-type: application/json' -X POST -d '{"name": "bruce", "visits": 9}' localhost:3000/
 //
 const arrayOpts = {
   body: {
