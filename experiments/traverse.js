@@ -45,6 +45,7 @@ const anonymousSchema = {
     splish: {type: 'string'},
     splash: {type: 'string'},
     bath: {type: 'integer'},
+    adventure: {type: 'string', enum: ['cave', 'dragon', 'plover']}
   }
 };
 
@@ -163,9 +164,9 @@ for (const schema in schemas) {
 }
 
 //
-// tests
+// tests of various schema configurations
 //
-const tests = [
+const schemaTests = [
   {schema: 'bodyJSONSchema', data: {
       requiredKey: [1, 2, 3],
       addresses: {address: 'bruce lane', zip: 9},
@@ -202,7 +203,11 @@ const tests = [
 ];
 
 let v;
-for (const t of tests) {
+const skipSchemaTests = true;
+for (const t of schemaTests) {
+  if (skipSchemaTests) {
+    continue;
+  }
   const {schema, data, skip} = t;
   const name = schema || '(anonymous)';
   if (skip) {
@@ -225,17 +230,28 @@ if (v) {
   console.log(v.toString());
 }
 
+// recursive descent evaluator tests
 const rdeTests = [
   {schema: 'simpleNumber', data: 4},
   {schema: 'simpleString', data: 'string'},
+  {schema: '', data: {
+    splish: 'splash',
+    splash: 'i was taking a',
+    bath: 16,
+  }}
 ];
 
 for (const t of rdeTests) {
   const {schema, data, skip} = t;
   console.log(`[using ${schema} to validate %o]`, data);
-  const realSchema = ajv.getSchema(schema).schema;
-  const result = rdeval(realSchema, data);
-  console.log(result);
+  const validator = ajv.getSchema(schema);
+  const realSchema = validator.schema;
+  const validation = validator(data);
+  rdeval(realSchema, data);
+  console.log(`-> validation ${validation ? 'passed' : 'failed'}`);
+  if (!validation) {
+    util.format(`-> ${validator.errors}`);
+  }
 }
 
 

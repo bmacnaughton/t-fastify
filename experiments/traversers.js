@@ -1,5 +1,7 @@
 'use strict';
 
+const util = require('util');
+
 // https://tools.ietf.org/html/draft-handrews-json-schema-validation-01#page-13
 
 const keywords = {
@@ -81,29 +83,60 @@ function homeGrown (schema, JSONPtr, rootSchema, parentJSONPtr, parentKeyword, p
 
 function rdeval(schema, target) {
   const root = schema;
+  const propPath = [];
 
   return evaluate(schema, target);
 
+  /**
+   * this function returns the type of schema that was used to validate as
+   * well as the schema. in some cases it needs to do evaluation in order to
+   * determine which element of the schema resulted in the passing the target
+   * value.
+   *
+   * many target values can pass the schema either because they are not checked
+   * in any way or because the checks that were in place don't check anything
+   * that matters from a security perspective.
+   */
   function evaluate (schema, target) {
+    console.log('evaluate', schema, target);
     // this provides no validation of any sort; it either always passes
     // or always fails.
     if (typeof schema === 'boolean') {
-      return [schema ? 'pass' : 'fail', ''];
+      return ['boolean'];
     }
+    // if it's not an object then ajv should not have validated the schema, so
+    // it's not clear how we got here.
     if (typeof schema !== 'object') {
-      return ['fail', '', schema];
+      return ['?', schema];
     }
 
-    // this is certainly less common than an object, but the test has to
+    // this is most likely less common than an object, but the test has to
     // be done anyway to tell if it's a non-array object, so this comes first.
+    //
+    // i don't believe this is allowed so ajv should not have validated the
+    // schema.
     if (Array.isArray(schema)) {
-      // handle array
-      return;
+      return ['?', schema];
     }
 
-    // it's an object
+    //
+    // it's an object. this is the most common case.
+    //
+    const {type, enum: _enum, const: _const, format} = schema;
 
-    const {type} = schema;
+    let validation;
+    // if both const and enum are present then const must be an element of
+    // enum or the validation would have failed.
+    if ('const' in schema) {
+      validation = _const;
+    } else if (_enum) {
+      validation = _enum;
+    }
+    if ('const' in schema && _enum) {
+      validation = _const;
+    }
+
+    // how to handle keywords?
 
     if (type === 'object') {
       // TODO handle IF/THEN/ELSE and allOf/anyOf/oneOf
@@ -120,8 +153,15 @@ function rdeval(schema, target) {
         evaluateDefinitions(definitions);
       }
       for (const prop in properties) {
-        // TODO construct object path to be able to map to result in target
-        evaluate(prop);
+        // TODO - may need to check keywords patternProperties and additionalProperties
+        // and possibly dependencies in order to completely evaluate.
+        //
+        // if the property exists in the target then it might have been validated as
+        // a string, an enum, or a const (or keyword or format).
+        if (target[prop]) {
+          const result = evaluate(properties[prop], target[prop]);
+          action(properties[prop], target[prop], result);
+        }
       }
       return;
     }
@@ -133,7 +173,7 @@ function rdeval(schema, target) {
     // it's a primitive of some sort. it should not be possible for it to be
     // an error because the validation should have failed if that were the case.
     // if formats are present then different tags might need to be applied. right
-    // now the only tags that matter are enum and const. the sequence for checks
+    // now the only keywords that matter are enum and const. the sequence for checks
     // is 1) type, 2) const, 3) enum. and only type really matters because const
     // and enum can cause the validation to fail but not for an incorrect type
     // to pass. if both const and enum are present it must pass the const check
@@ -141,23 +181,39 @@ function rdeval(schema, target) {
     // useful at all.
     switch(type) {
       case 'number':
-        return ['pass', 'alphanum'];
-      case 'string':
-        return ['pass', ''];
       case 'integer':
-        return ['pass', 'alphanum'];
+        // this passes as alphanum. it's possible that the value was coerced to
+        // a number.
+        return ['alphanum'];
+      case 'string':
+        // in this case an enum or const value matters (in addition to formats and
+        // keywords). if none of the previous are present then the tags don't change.
+        return [_enum ? 'enum' : 'string'];
       case 'boolean':
-        return ['pass', 'alphanum'];
+        // this passes as alphanum though it is most often a boolean value, i.e.,
+        // true or false, not "true" or "false".
+        return ['alphanum'];
       case 'null':
-        return ['pass', ''];
+        return ['null'];
       default:
-        // this is some kind of error. not sure what.
-        return ['fail', ''];
+        // this is some kind of error. not sure what but ajv should have failed the
+        // schema validation if strict mode. if not strict mode, then it's noise.
+        return ['?'];
     }
   }
 }
 
+function action(schema, prop, result) {
+  schema = util.format(schema);
+  result = util.format(result);
+  if (typeof prop === 'string') {
+    prop = `"${prop}"`;
+  }
+  console.log(`s${schema} p:${prop} r${result}`);
+}
+
 function setTracking(prop, string, tag) {
+
   console.log(`@TRACK ${prop} ${string} as ${tag}`);
 }
 
