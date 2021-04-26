@@ -45,7 +45,8 @@ const anonymousSchema = {
     splish: {type: 'string'},
     splash: {type: 'string'},
     bath: {type: 'integer'},
-    adventure: {type: 'string', enum: ['cave', 'dragon', 'plover']}
+    adventure: {type: 'string', enum: ['xyzzy', 'dragon', 'plover']},
+    colossal: {type: 'string', const: 'cave'},
   }
 };
 
@@ -238,17 +239,20 @@ const rdeTests = [
     splish: 'splash',
     splash: 'i was taking a',
     bath: 16,
+    adventure: 'xyzzy',
+    colossal: 'cave',
   }}
 ];
 
 for (const t of rdeTests) {
   const {schema, data, skip} = t;
-  console.log(`[using ${schema} to validate %o]`, data);
+  const name = schema || 'anonymous';
+  console.log(`[using ${name} to validate %o]`, data);
   const validator = ajv.getSchema(schema);
   const realSchema = validator.schema;
   const validation = validator(data);
   rdeval(realSchema, data);
-  console.log(`-> validation ${validation ? 'passed' : 'failed'}`);
+  console.log(`[validation ${validation ? 'passed' : 'failed'}]`);
   if (!validation) {
     util.format(`-> ${validator.errors}`);
   }

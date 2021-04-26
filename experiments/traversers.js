@@ -96,13 +96,17 @@ function rdeval(schema, target) {
    * many target values can pass the schema either because they are not checked
    * in any way or because the checks that were in place don't check anything
    * that matters from a security perspective.
+   *
+   * @param schema - the schema applicable to the target
+   * @param target - the target to be checked against the schema
+   * @returns ['validation-type', 'validator']
    */
   function evaluate (schema, target) {
-    console.log('evaluate', schema, target);
+    console.log(`evaluate data "${util.format(target)}" using schema ${util.format(schema)}`);
     // this provides no validation of any sort; it either always passes
     // or always fails.
     if (typeof schema === 'boolean') {
-      return ['boolean'];
+      return ['?', 'boolean'];
     }
     // if it's not an object then ajv should not have validated the schema, so
     // it's not clear how we got here.
@@ -122,19 +126,20 @@ function rdeval(schema, target) {
     //
     // it's an object. this is the most common case.
     //
-    const {type, enum: _enum, const: _const, format} = schema;
+    const {enum: _enum, const: _const, format} = schema;
+    let {type} = schema;
 
+    //*
     let validation;
     // if both const and enum are present then const must be an element of
     // enum or the validation would have failed.
+    if ('enum' in schema) {
+      validation = 'enum';
+    }
     if ('const' in schema) {
-      validation = _const;
-    } else if (_enum) {
-      validation = _enum;
+      validation = 'const';
     }
-    if ('const' in schema && _enum) {
-      validation = _const;
-    }
+    // */
 
     // how to handle keywords?
 
@@ -160,7 +165,7 @@ function rdeval(schema, target) {
         // a string, an enum, or a const (or keyword or format).
         if (target[prop]) {
           const result = evaluate(properties[prop], target[prop]);
-          action(properties[prop], target[prop], result);
+          action(prop, properties, target, result);
         }
       }
       return;
@@ -179,44 +184,64 @@ function rdeval(schema, target) {
     // to pass. if both const and enum are present it must pass the const check
     // before the enum check is executed, so using const and enum is really not
     // useful at all.
+    let tag = '?';
     switch(type) {
       case 'number':
       case 'integer':
         // this passes as alphanum. it's possible that the value was coerced to
         // a number.
-        return ['alphanum'];
+        tag = 'alphanum';
+        break;
       case 'string':
         // in this case an enum or const value matters (in addition to formats and
         // keywords). if none of the previous are present then the tags don't change.
-        return [_enum ? 'enum' : 'string'];
+        if (validation) {
+          tag = null;
+          type = `${validation}:string`;
+        } else {
+          tag = 'string';
+        }
+        break;
       case 'boolean':
         // this passes as alphanum though it is most often a boolean value, i.e.,
         // true or false, not "true" or "false".
-        return ['alphanum'];
+        tag = 'alphanum';
+        break;
       case 'null':
-        return ['null'];
+        tag = 'null';
+        break;
       default:
         // this is some kind of error. not sure what but ajv should have failed the
         // schema validation if strict mode. if not strict mode, then it's noise.
-        return ['?'];
+        break;
     }
+    return [tag, type];
   }
 }
 
-function action(schema, prop, result) {
-  schema = util.format(schema);
+//
+// this function becomes the tagging/tracking function
+//
+function action(prop, schema, target, result) {
+  const [tag, type, ...rest] = result;
+  if (tag === null) {
+    console.log(`-> REMOVE TRACKING (${tag}/${type})`);
+  } else if (tag === 'string') {
+    console.log(`-> ADD STRING-TYPE-CHECKED (${tag}/${type})`);
+  } else if (tag === 'alphanum') {
+    console.log(`-> action: REMOVE TRACKING (${tag}/${type})`)
+  }
+  /*
+  schema = util.format(schema[prop]);
+  target = util.format(target[prop]);
   result = util.format(result);
-  if (typeof prop === 'string') {
-    prop = `"${prop}"`;
+  if (typeof target === 'string') {
+    target = `"${target}"`;
   }
-  console.log(`s${schema} p:${prop} r${result}`);
+  console.log(`-> action on property '${prop}' value '${target}'`);
+  console.log(`   with schema ${schema} => results ${result}`);
+  // */
 }
-
-function setTracking(prop, string, tag) {
-
-  console.log(`@TRACK ${prop} ${string} as ${tag}`);
-}
-
 
 module.exports = {
   homeGrown,
