@@ -47,6 +47,15 @@ const anonymousSchema = {
     bath: {type: 'integer'},
     adventure: {type: 'string', enum: ['xyzzy', 'dragon', 'plover']},
     colossal: {type: 'string', const: 'cave'},
+    plover: true,
+    descending: {
+      type: 'object',
+      properties: {
+        to: {type: 'string', const: 'yet'},
+        another: {type: 'string', enum: ['level', 'mode', 'nightmare']},
+        points: {type: 'integer'},
+      }
+    }
   }
 };
 
@@ -241,6 +250,13 @@ const rdeTests = [
     bath: 16,
     adventure: 'xyzzy',
     colossal: 'cave',
+    plover: 'iam a very & ; rm -rf /',        // this string validates b/c schema === true
+    //descending: true, // will fail - isn't an object
+    descending: {
+      to: 'yet',
+      another: 'level',
+      points: 25,
+    },
   }}
 ];
 

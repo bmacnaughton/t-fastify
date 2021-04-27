@@ -85,13 +85,27 @@ function rdeval(schema, target) {
   const root = schema;
   const propPath = [];
 
+  /**
+   * the return value of this function determines what tags are applied
+   * or removed.
+   *
+   * @param {object|boolean} schema - JSON Schema
+   * @param {any} target - the item being validated
+   * @returns [tag, determinant]
+   *           tag === null -> remove tracking
+   *           typeof tag === string && tag !== '?' -> add tag to item
+   *
+   *           determinant is the modifier:type of item
+   *           - not sure if it is needed but useful for explortation
+   *             and debugging.
+   */
   return evaluate(schema, target);
 
   /**
    * this function returns the type of schema that was used to validate as
-   * well as the schema. in some cases it needs to do evaluation in order to
-   * determine which element of the schema resulted in the passing the target
-   * value.
+   * well as the validator in the schema. in some cases it needs to do evaluation
+   * in order to determine which element of the schema resulted in the passing the
+   * target value.
    *
    * many target values can pass the schema either because they are not checked
    * in any way or because the checks that were in place don't check anything
@@ -103,10 +117,11 @@ function rdeval(schema, target) {
    */
   function evaluate (schema, target) {
     console.log(`evaluate data "${util.format(target)}" using schema ${util.format(schema)}`);
+
     // this provides no validation of any sort; it either always passes
     // or always fails.
     if (typeof schema === 'boolean') {
-      return ['?', 'boolean'];
+      return booleanSchema(target);
     }
     // if it's not an object then ajv should not have validated the schema, so
     // it's not clear how we got here.
@@ -115,122 +130,160 @@ function rdeval(schema, target) {
     }
 
     // this is most likely less common than an object, but the test has to
-    // be done anyway to tell if it's a non-array object, so this comes first.
+    // be done anyway to make sure the schema is a non-array object.
     //
     // i don't believe this is allowed so ajv should not have validated the
-    // schema.
+    // schema, so just return the 'no modifications' question mark and the
+    // non-conforming schema.
     if (Array.isArray(schema)) {
       return ['?', schema];
     }
 
+    // now both the target and the schema both have to be considered; they're
+    // not independent any longer.
     //
-    // it's an object. this is the most common case.
+    // if the target is an object it must be evaluated against the schema to
+    // determine what properties (at any depth) might have been validated.
     //
-    const {enum: _enum, const: _const, format} = schema;
-    let {type} = schema;
+    // if the target is a string then it must be evaluated against const, enum,
+    // formats and keywords.
+    //
+    // (NEXT MAYBE NOT, float and integer don't matter tag-wise)
+    // if the target is a number the schema must be checked to see if an integer
+    // was specified?
+    //
+    // if the target is a boolean then the schema doesn't matter. we can add
+    // alphanum. if the value has been coerced or is a natural boolean then it
+    // just won't be tagged.
+    //
 
-    //*
+    //
+    // the schema is an object. this is the only useful case.
+    //
+    let {type} = schema;
+    if (type !== typeof target && type !== 'integer') {
+      // TODO consider logging because this code should only be called if the
+      // validation succeeded and yet this target is the wrong type. it must mean
+      // that the logic behind this approach is flawed.
+      return ['?', type];
+    }
+
+
+
+    // check enum and const now because they cause any type to become untracked.
+    // todo - should we do this when the value of const or at least one enum element
+    // is an object? yes, we're just counting on the user to do things right.
     let validation;
     // if both const and enum are present then const must be an element of
-    // enum or the validation would have failed.
+    // enum or the validation would have failed. given the loose standard and the
+    // fact that const could a falsey value, check for the presence of enum and
+    // const as opposed to a truthy value.
     if ('enum' in schema) {
       validation = 'enum';
     }
     if ('const' in schema) {
       validation = 'const';
     }
-    // */
+
+    if (type === 'number' || type === 'integer' || type === 'boolean') {
+      // don't care about any keywords or formats but if constrained by
+      // an enum or const remove tracking.
+      if (validation) {
+        return [null, `${type}:${validation}`];
+      }
+      return ['alphanum', type];
+    }
+
+    if (type === 'string') {
+      // keywords and formats can make a difference but for now just look
+      // at enum and const.
+      if (validation) {
+        return [null, `string:${validation}`];
+      }
+      return ['string-type-checked', 'string'];
+    }
+
+    // it must be an object
+    if (type !== 'object') {
+      throw new Error(`Found ${type} when expecting object`);
+    }
 
     // how to handle keywords?
 
-    if (type === 'object') {
-      // TODO handle IF/THEN/ELSE and allOf/anyOf/oneOf
+    // TODO handle IF/THEN/ELSE and allOf/anyOf/oneOf
+    //
+    // if enum and properties exist then properties takes precedence if a prop
+    // appears in both. so when following path in object, check to see if it
+    // appears in properties first. if it does then that was the validation done
+    // (if any). if it doesn't appear in properties AND there is an enum then the
+    // entire object is trusted (because it passed an enum).
+    const {definitions, properties} = schema;
+
+    // the id isn't important - we'll use getSchema() to fetch any schemas.
+    if (definitions) {
+      evaluateDefinitions(definitions);
+    }
+    for (const prop in properties) {
+      // TODO - may need to check keywords patternProperties and additionalProperties
+      // and possibly dependencies in order to completely evaluate.
       //
-      // if enum and properties exist then properties takes precedence if a prop
-      // appears in both. so when following path in object, check to see if it
-      // appears in properties first. if it does then that was the validation done
-      // (if any). if it doesn't appear in properties AND there is an enum then the
-      // entire object is trusted (because it passed an enum).
-      const {definitions, properties} = schema;
-
-      // the id isn't important - we'll use getSchema() to fetch any schemas.
-      if (definitions) {
-        evaluateDefinitions(definitions);
-      }
-      for (const prop in properties) {
-        // TODO - may need to check keywords patternProperties and additionalProperties
-        // and possibly dependencies in order to completely evaluate.
-        //
-        // if the property exists in the target then it might have been validated as
-        // a string, an enum, or a const (or keyword or format).
-        if (target[prop]) {
-          const result = evaluate(properties[prop], target[prop]);
-          action(prop, properties, target, result);
+      // if the property exists in the target then it might have been validated as
+      // a string, an enum, or a const (or keyword or format).
+      if (prop in target) {
+        propPathPush(prop);
+        const result = evaluate(properties[prop], target[prop]);
+        propPathPop();
+        if (!Array.isArray(result)) {
+          throw new Error(`evaluate ${prop} returned ${result}`);
         }
+        action(prop, properties, target, result);
       }
-      return;
     }
+    return ['?', 'multiple-maybe'];
+  }
 
-    if (type === 'array') {
-      return;
-    }
+  function popPropPath(tag, validator) {
+    //console.log(`[returning from ${propPath.pop()}]`);
+    return [tag, validator];
+  }
 
-    // it's a primitive of some sort. it should not be possible for it to be
-    // an error because the validation should have failed if that were the case.
-    // if formats are present then different tags might need to be applied. right
-    // now the only keywords that matter are enum and const. the sequence for checks
-    // is 1) type, 2) const, 3) enum. and only type really matters because const
-    // and enum can cause the validation to fail but not for an incorrect type
-    // to pass. if both const and enum are present it must pass the const check
-    // before the enum check is executed, so using const and enum is really not
-    // useful at all.
-    let tag = '?';
-    switch(type) {
-      case 'number':
-      case 'integer':
-        // this passes as alphanum. it's possible that the value was coerced to
-        // a number.
-        tag = 'alphanum';
-        break;
-      case 'string':
-        // in this case an enum or const value matters (in addition to formats and
-        // keywords). if none of the previous are present then the tags don't change.
-        if (validation) {
-          tag = null;
-          type = `${validation}:string`;
-        } else {
-          tag = 'string';
-        }
-        break;
-      case 'boolean':
-        // this passes as alphanum though it is most often a boolean value, i.e.,
-        // true or false, not "true" or "false".
-        tag = 'alphanum';
-        break;
-      case 'null':
-        tag = 'null';
-        break;
-      default:
-        // this is some kind of error. not sure what but ajv should have failed the
-        // schema validation if strict mode. if not strict mode, then it's noise.
-        break;
+  function propPathPush(prop) {
+    propPath.push(prop);
+    console.log(`[descending to ${propPath.join('.')}]`);
+  }
+  function propPathPop() {
+    propPath.pop();
+    if (propPath.length) {
+      console.log(`[returning to ${propPath.join('.')}]`);
+    } else {
+      console.log('[returning to {}]');
     }
-    return [tag, type];
   }
 }
 
+function schemaType(thing) {
+  if (typeof thing !== 'object') {
+    return typeof thing;
+  }
+  return Array.isArray(thing) ? 'array' : 'object';
+}
+
+// boolean schema just passes or fails; nothing is known about target.
+function booleanSchema(target) {
+  return ['?', schemaType(target)];
+}
 //
 // this function becomes the tagging/tracking function
 //
 function action(prop, schema, target, result) {
   const [tag, type, ...rest] = result;
   if (tag === null) {
-    console.log(`-> REMOVE TRACKING (${tag}/${type})`);
-  } else if (tag === 'string') {
-    console.log(`-> ADD STRING-TYPE-CHECKED (${tag}/${type})`);
-  } else if (tag === 'alphanum') {
-    console.log(`-> action: REMOVE TRACKING (${tag}/${type})`)
-  }
+    console.log(`-> REMOVE TRACKING (<${tag}>/${type})`);
+  } else if (tag === '?') {
+    console.log(`-> ? NO CHANGE`);
+  } else {
+    console.log(`-> ADD ${tag} (${type})`);
+}
   /*
   schema = util.format(schema[prop]);
   target = util.format(target[prop]);
