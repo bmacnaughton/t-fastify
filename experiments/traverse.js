@@ -55,6 +55,12 @@ const anonymousSchema = {
         another: {type: 'string', enum: ['level', 'mode', 'nightmare']},
         points: {type: 'integer'},
       }
+    },
+    "check-enum": {
+      type: 'object',
+      enum: [
+        {bruce: 'wenxin', heihei: 'tuna'},
+      ],
     }
   }
 };
@@ -257,6 +263,10 @@ const rdeTests = [
       another: 'level',
       points: 25,
     },
+    'check-enum': {
+      bruce: 'wenxin',
+      heihei: 'tuna',
+    }
   }}
 ];
 

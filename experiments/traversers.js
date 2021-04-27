@@ -1,6 +1,7 @@
 'use strict';
 
 const util = require('util');
+const equal = require('fast-deep-equal');
 
 // https://tools.ietf.org/html/draft-handrews-json-schema-validation-01#page-13
 
@@ -168,28 +169,29 @@ function rdeval(schema, target) {
       return ['?', type];
     }
 
-
-
     // check enum and const now because they cause any type to become untracked.
     // todo - should we do this when the value of const or at least one enum element
-    // is an object? yes, we're just counting on the user to do things right.
-    let validation;
+    // is an object? yes, we should not second-guess the user.
+    let validator;
+    let validations;
     // if both const and enum are present then const must be an element of
     // enum or the validation would have failed. given the loose standard and the
     // fact that const could a falsey value, check for the presence of enum and
     // const as opposed to a truthy value.
-    if ('enum' in schema) {
-      validation = 'enum';
+    if ('enum' in schema && Array.isArray(schema.enum)) {
+      validator = 'enum';
+      validations = schema.enum;
     }
     if ('const' in schema) {
-      validation = 'const';
+      validator = 'const';
+      validations = [schema.const];
     }
 
     if (type === 'number' || type === 'integer' || type === 'boolean') {
       // don't care about any keywords or formats but if constrained by
       // an enum or const remove tracking.
-      if (validation) {
-        return [null, `${type}:${validation}`];
+      if (validator) {
+        return [null, `${type}:${validator}`];
       }
       return ['alphanum', type];
     }
@@ -197,8 +199,8 @@ function rdeval(schema, target) {
     if (type === 'string') {
       // keywords and formats can make a difference but for now just look
       // at enum and const.
-      if (validation) {
-        return [null, `string:${validation}`];
+      if (validator) {
+        return [null, `string:${validator}`];
       }
       return ['string-type-checked', 'string'];
     }
@@ -219,10 +221,39 @@ function rdeval(schema, target) {
     // entire object is trusted (because it passed an enum).
     const {definitions, properties} = schema;
 
-    // the id isn't important - we'll use getSchema() to fetch any schemas.
+    // the id isn't important - we'll use getSchema() to fetch any schemas. but
+    // definitions can be refered to from within the schema so capture them.
+    // question - are they global even if embedded in a lower level object?
     if (definitions) {
       evaluateDefinitions(definitions);
     }
+
+    // todo - evaluate "deep-equals"
+    // if enum or const then the object must be deeply compared against those,
+    // as opposed to descending and evaluating schemas. "an instance validates
+    // if its value is equal to one of the elements in this keyword's array
+    // value".
+    if (validator) {
+      let validated = false;
+      let identical = new Array(validations.length);
+      for (let i = 0; i < validations.length; i++) {
+        identical[i] = equal(validations[i], target);
+        if (identical[i]) {
+          validated = true;
+        }
+      }
+      // if one of the const/enum values resulted in the target being
+      // validated then the target must be walked to tag/untag values
+      // in the validations.
+      if (validated) {
+        return ['VARIOUS-TAG-CHANGES', `${validator}:formatted validator(s)`];
+      } else {
+        throw new Error(`enum/const failed validation ${util.format(target)}`);
+      }
+    }
+
+    // only properties that are in the schema can possibly be validated, so don't
+    // consider properties that exist in the target but not the schema.
     for (const prop in properties) {
       // TODO - may need to check keywords patternProperties and additionalProperties
       // and possibly dependencies in order to completely evaluate.
@@ -232,31 +263,42 @@ function rdeval(schema, target) {
       if (prop in target) {
         propPathPush(prop);
         const result = evaluate(properties[prop], target[prop]);
-        propPathPop();
         if (!Array.isArray(result)) {
           throw new Error(`evaluate ${prop} returned ${result}`);
         }
-        action(prop, properties, target, result);
+        propPathPop(result);
+        //console.log(`result from evaluate() ${util.format(result)}`);
+        //action(prop, properties, target, result);
       }
     }
-    return ['?', 'multiple-maybe'];
-  }
+    return ['?', 'evaluated-object'];
 
-  function popPropPath(tag, validator) {
-    //console.log(`[returning from ${propPath.pop()}]`);
-    return [tag, validator];
-  }
-
-  function propPathPush(prop) {
-    propPath.push(prop);
-    console.log(`[descending to ${propPath.join('.')}]`);
-  }
-  function propPathPop() {
-    propPath.pop();
-    if (propPath.length) {
-      console.log(`[returning to ${propPath.join('.')}]`);
-    } else {
-      console.log('[returning to {}]');
+    function propPathPush (prop) {
+      propPath.push(prop);
+      const prefix = '['.repeat(propPath.length + 1);
+      const suffix = ']'.repeat(propPath.length + 1);
+      console.log(`${prefix}descending to ${propPath.join('.')}${suffix}`);
+    }
+    function propPathPop (result) {
+      const prefix = '['.repeat(propPath.length + 1);
+      const suffix = ']'.repeat(propPath.length + 1);
+      const from = propPath.length ? propPath.join('.') : 'hmmm.';
+      propPath.pop();
+      action(result);
+      console.log(`${prefix}returning from ${from}${suffix}`);
+    }
+    //
+    // this function becomes the tagging/tracking function
+    //
+    function action (result) {
+      const [tag, type, ...rest] = result;
+      if (tag === null) {
+        console.log(`-> REMOVE TRACKING (<${tag}>/${type})`);
+      } else if (tag === '?') {
+        console.log(`-> ? NO CHANGE`);
+      } else {
+        console.log(`-> ADD ${tag} (${type})`);
+      }
     }
   }
 }
@@ -283,17 +325,7 @@ function action(prop, schema, target, result) {
     console.log(`-> ? NO CHANGE`);
   } else {
     console.log(`-> ADD ${tag} (${type})`);
-}
-  /*
-  schema = util.format(schema[prop]);
-  target = util.format(target[prop]);
-  result = util.format(result);
-  if (typeof target === 'string') {
-    target = `"${target}"`;
   }
-  console.log(`-> action on property '${prop}' value '${target}'`);
-  console.log(`   with schema ${schema} => results ${result}`);
-  // */
 }
 
 module.exports = {
