@@ -128,7 +128,7 @@ function rdeval(schema, target) {
     // if it's not an object then ajv should not have validated the schema, so
     // it's not clear how we got here.
     if (typeof schema !== 'object') {
-      return ['?', schema];
+      return ['?', `(invalid: ${schema})`];
     }
 
     // this is most likely less common than an object, but the test has to
@@ -138,7 +138,7 @@ function rdeval(schema, target) {
     // schema, so just return the 'no modifications' question mark and the
     // non-conforming schema.
     if (Array.isArray(schema)) {
-      return ['?', schema];
+      return ['?', `(invalid: ${schema})];
     }
 
     // now both the target and the schema both have to be considered; they're
@@ -279,21 +279,19 @@ function rdeval(schema, target) {
     // return something when an object is evaluated. this will not be used
     // because it's not possible to tag an object, but it assures that return
     // values are a consistent format.
-    return ['?', 'evaluated-object'];
+    return ['?', '(evaluated-object)'];
 
     function propPathPush (prop) {
       propPath.push(prop);
-      const prefix = '['.repeat(propPath.length + 1);
-      const suffix = ']'.repeat(propPath.length + 1);
-      console.log(`${prefix}descending to ${propPath.join('.')}${suffix}`);
+      const prefix = '\u2193'.repeat(propPath.length + 1);
+      console.log(`${prefix} descending to ${propPath.join('.')}`);
     }
     function propPathPop (result) {
-      const prefix = '['.repeat(propPath.length + 1);
-      const suffix = ']'.repeat(propPath.length + 1);
+      const prefix = '\u2191'.repeat(propPath.length + 1);
       const from = propPath.length ? propPath.join('.') : 'hmmm.';
       propPath.pop();
       action(result);
-      console.log(`${prefix}returning from ${from}${suffix}`);
+      console.log(`${prefix} returning from ${from}`);
     }
     //
     // this function becomes the tagging/tracking function
