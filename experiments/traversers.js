@@ -1,7 +1,8 @@
 'use strict';
 
 const util = require('util');
-const equal = require('fast-deep-equal');
+const fastDeepEqual = require('fast-deep-equal');
+const objectWalk = require('./object-walk');
 
 // https://tools.ietf.org/html/draft-handrews-json-schema-validation-01#page-13
 
@@ -228,7 +229,6 @@ function rdeval(schema, target) {
       evaluateDefinitions(definitions);
     }
 
-    // todo - evaluate "deep-equals"
     // if enum or const then the object must be deeply compared against those,
     // as opposed to descending and evaluating schemas. "an instance validates
     // if its value is equal to one of the elements in this keyword's array
@@ -237,16 +237,21 @@ function rdeval(schema, target) {
       let validated = false;
       let identical = new Array(validations.length);
       for (let i = 0; i < validations.length; i++) {
-        identical[i] = equal(validations[i], target);
-        if (identical[i]) {
+        const r = fastDeepEqual(validations[i], target);
+        if (r) {
+          identical[i] = validations[i];
           validated = true;
         }
       }
-      // if one of the const/enum values resulted in the target being
-      // validated then the target must be walked to tag/untag values
-      // in the validations.
+      // if one of the const/enum values resulted in the target being validated
+      // then the target must be walked to tag/untag values in the validations.
       if (validated) {
-        return ['VARIOUS-TAG-CHANGES', `${validator}:formatted validator(s)`];
+        for (const [object, key] of objectWalk(target)) {
+          if (typeof object[key] === 'string') {
+            action([null, `${validator}:${util.format(object)}[${key}]`]);
+          }
+        }
+        return ['?', 'enum:walked'];
       } else {
         throw new Error(`enum/const failed validation ${util.format(target)}`);
       }
@@ -271,6 +276,9 @@ function rdeval(schema, target) {
         //action(prop, properties, target, result);
       }
     }
+    // return something when an object is evaluated. this will not be used
+    // because it's not possible to tag an object, but it assures that return
+    // values are a consistent format.
     return ['?', 'evaluated-object'];
 
     function propPathPush (prop) {
@@ -295,7 +303,7 @@ function rdeval(schema, target) {
       if (tag === null) {
         console.log(`-> REMOVE TRACKING (<${tag}>/${type})`);
       } else if (tag === '?') {
-        console.log(`-> ? NO CHANGE`);
+        console.log(`-> ? NO CHANGE (${type})`);
       } else {
         console.log(`-> ADD ${tag} (${type})`);
       }
