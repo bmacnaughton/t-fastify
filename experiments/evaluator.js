@@ -40,11 +40,25 @@ const keywords = {
   semantic: ['format'],
 };
 
-class Evaluator {
-  constructor(schema) {
-    this.schema = schema;
-    this.path = [];
-  }
+function rdeval(schema, target) {
+  const root = schema;
+  const propPath = [];
+
+  /**
+   * the return value of this function determines what tags are applied
+   * or removed.
+   *
+   * @param {object|boolean} schema - JSON Schema
+   * @param {any} target - the item being validated
+   * @returns [tag, determinant]
+   *           tag === null -> remove tracking
+   *           typeof tag === string && tag !== '?' -> add tag to item
+   *
+   *           determinant is the modifier:type of item
+   *           - not sure if it is needed but useful for explortation
+   *             and debugging.
+   */
+  return evaluate(schema, target);
 
   /**
    * this function returns the type of schema that was used to validate as
@@ -60,11 +74,7 @@ class Evaluator {
    * @param target - the target to be checked against the schema
    * @returns ['validation-type', 'validator']
    */
-  evaluate(target) {
-    return this.eval(this.schema, target);
-  }
-
-  eval(schema, target) {
+  function evaluate(schema, target) {
     // this provides no validation of any sort; it either always passes
     // or always fails.
     if (typeof schema === 'boolean') {
@@ -83,7 +93,7 @@ class Evaluator {
     // schema, so just return the 'no modifications' question mark and the
     // non-conforming schema.
     if (Array.isArray(schema)) {
-      return ['?', `(invalid-schema: ${schema})`];
+      return ['?', `(invalid: ${schema})`];
     }
 
     // now both the target and the schema both have to be considered; they're
@@ -174,7 +184,7 @@ class Evaluator {
       if (validator) {
         return [null, `array:${validator} (TODO - walk array)`];
       }
-      return ['?', 'array (TODO items, additionalItems)'];
+      return ['?', `array (TODO items, additionalItems)`];
     }
 
     // it must be an object
@@ -222,7 +232,7 @@ class Evaluator {
       if (validated) {
         for (const [object, key] of objectWalk(target)) {
           if (typeof object[key] === 'string') {
-            this.action([null, `${validator}:${util.format(object)}[${key}]`]);
+            action([null, `${validator}:${util.format(object)}[${key}]`]);
           }
         }
         return ['?', 'enum:walked'];
@@ -241,12 +251,12 @@ class Evaluator {
       // if the property exists in the target then it might have been validated as
       // a string, an enum, or a const (or keyword or format).
       if (prop in target) {
-        this.pathPush(prop);
-        const result = this.eval(properties[prop], target[prop]);
+        propPathPush(prop);
+        const result = evaluate(properties[prop], target[prop]);
         if (!Array.isArray(result)) {
           throw new Error(`evaluate ${prop} returned ${result}`);
         }
-        this.pathPop(result);
+        propPathPop(result);
         //console.log(`result from evaluate() ${util.format(result)}`);
         //action(prop, properties, target, result);
       }
@@ -255,42 +265,37 @@ class Evaluator {
     // because it's not possible to tag an object, but it assures that return
     // values are a consistent format.
     return ['?', '(evaluated-object)'];
-  }
 
-
-  pathPush(prop) {
-    this.path.push(prop);
-    const prefix = '\u2193'.repeat(this.path.length);
-    console.log(`${prefix} descending to ${this.path.join('.')}`);
-  }
-
-  pathPop(result) {
-    const n = this.path.length;
-    const prefix = '\u2191'.repeat(n);
-    const from = n ? this.path.join('.') : 'hmmm.';
-    this.path.pop();
-    this.action(result, n);
-    console.log(`${prefix} returning from ${from}`);
-  }
-  //
-  // this function becomes the tagging/tracking function
-  //
-  action(result, n) {
-    const [tag, type, ...rest] = result;
-    if (rest.length) {
-      throw new Error('found more result than expected');
+    function propPathPush(prop) {
+      propPath.push(prop);
+      const prefix = '\u2193'.repeat(propPath.length);
+      console.log(`${prefix} descending to ${propPath.join('.')}`);
     }
-    const prefix = `${' '.repeat(2 * n)}\u2192`;
-    if (tag === null) {
-      console.log(`${prefix} REMOVE TRACKING (<${tag}>/${type})`);
-    } else if (tag === '?') {
-      console.log(`${prefix} ? NO CHANGE (${type})`);
-    } else {
-      console.log(`${prefix} ADD ${tag} (${type})`);
+    function propPathPop(result) {
+      const n = propPath.length;
+      const prefix = '\u2191'.repeat(n);
+      const from = n ? propPath.join('.') : 'hmmm.';
+      propPath.pop();
+      action(result, n);
+      console.log(`${prefix} returning from ${from}`);
+    }
+    //
+    // this function becomes the tagging/tracking function
+    //
+    function action(result, n) {
+      const [tag, type, ...rest] = result;
+      const prefix = `${' '.repeat(2 * n)}\u2192`;
+      if (tag === null) {
+        console.log(`${prefix} REMOVE TRACKING (<${tag}>/${type})`);
+      } else if (tag === '?') {
+        console.log(`${prefix} ? NO CHANGE (${type})`);
+      } else {
+        console.log(`${prefix} ADD ${tag} (${type})`);
+      }
     }
   }
 }
 
 module.exports = {
-  Evaluator,
+  rdeval,
 };

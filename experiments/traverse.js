@@ -6,7 +6,7 @@ const util = require('util');
 
 const Ajv = require('ajv');
 
-const {rdeval} = require('./traversers');
+const {Evaluator} = require('./traversers');
 
 const addressSchema = {
   $id: 'addressSchema',
@@ -287,7 +287,8 @@ for (const t of rdeTests) {
   const realSchema = validator.schema;
   console.log(`${bBlue}schema ${name} is ${util.format(realSchema)}${clear}`);
   const validation = validator(data);
-  rdeval(realSchema, data);
+  const evaluator = new Evaluator(realSchema);
+  evaluator.evaluate(data);
   console.log(`[validation ${validation ? 'passed' : 'failed'}]`);
   if (!validation) {
     util.format(`-> ${validator.errors}`);
