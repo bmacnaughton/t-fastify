@@ -6,7 +6,7 @@ const util = require('util');
 
 const Ajv = require('ajv');
 
-const {Evaluator} = require('./traversers');
+const {Evaluator} = require('./evaluator');
 
 const addressSchema = {
   $id: 'addressSchema',

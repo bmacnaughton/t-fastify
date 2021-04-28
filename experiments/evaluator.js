@@ -40,25 +40,20 @@ const keywords = {
   semantic: ['format'],
 };
 
-function rdeval(schema, target) {
-  const root = schema;
-  const propPath = [];
-
-  /**
-   * the return value of this function determines what tags are applied
-   * or removed.
-   *
-   * @param {object|boolean} schema - JSON Schema
-   * @param {any} target - the item being validated
-   * @returns [tag, determinant]
-   *           tag === null -> remove tracking
-   *           typeof tag === string && tag !== '?' -> add tag to item
-   *
-   *           determinant is the modifier:type of item
-   *           - not sure if it is needed but useful for explortation
-   *             and debugging.
-   */
-  return evaluate(schema, target);
+class Evaluator {
+  constructor(schema) {
+    this.schema = schema;
+    this.path = [];
+    // map each JSON Schema type to the method name for it
+    this.dispatch = new Map([
+      ['boolean', 'scalar'],
+      ['number', 'scalar'],
+      ['integer', 'scalar'],
+      ['string', 'string'],
+      ['array', 'array'],
+      ['object', 'object']
+    ]);
+  }
 
   /**
    * this function returns the type of schema that was used to validate as
@@ -74,7 +69,11 @@ function rdeval(schema, target) {
    * @param target - the target to be checked against the schema
    * @returns ['validation-type', 'validator']
    */
-  function evaluate(schema, target) {
+  evaluate(target) {
+    return this.eval(this.schema, target);
+  }
+
+  eval(schema, target) {
     // this provides no validation of any sort; it either always passes
     // or always fails.
     if (typeof schema === 'boolean') {
@@ -93,7 +92,7 @@ function rdeval(schema, target) {
     // schema, so just return the 'no modifications' question mark and the
     // non-conforming schema.
     if (Array.isArray(schema)) {
-      return ['?', `(invalid: ${schema})`];
+      return ['?', `(invalid-schema: ${schema})`];
     }
 
     // now both the target and the schema both have to be considered; they're
@@ -143,57 +142,114 @@ function rdeval(schema, target) {
       return ['?', type];
     }
 
+    // arguments for schema-type specific method
+    const args = {type, schema, target};
+
     // check enum and const now because they cause any type to become untracked.
     // todo - should we do this when the value of const or at least one enum element
     // is an object? yes, we should not second-guess the user.
     let validator;
     let validations;
     // if both const and enum are present then const must be an element of
-    // enum or the validation would have failed. given the loose standard and the
-    // fact that const could a falsey value, check for the presence of enum and
-    // const as opposed to a truthy value.
+    // enum or the validation would have failed. given the loose standard and
+    // the fact that const could a falsey value (i.e. null), check for the
+    // presence of enum and const as opposed to a truthy value.
     if ('enum' in schema && Array.isArray(schema.enum)) {
       validator = 'enum';
       validations = schema.enum;
     }
     if ('const' in schema) {
       validator = 'const';
-      validations = [schema.const];
+      validations = [schema.const]; // make it the array it's sugar for
     }
 
-    if (type === 'number' || type === 'integer' || type === 'boolean') {
-      // don't care about any keywords or formats but if constrained by
-      // an enum or const remove tracking.
-      if (validator) {
-        return [null, `${type}:${validator}`];
-      }
-      return ['alphanum', type];
+    const method = this.dispatch.get(type);
+
+    if (!method) {
+      // while testing, in production just return ['?', 'error']
+      throw new Error(`Found ${type} when expecting valid schema type`);
+    }
+    if (validations) {
+      args.validator = validator;
+      args.validations = validations;
     }
 
-    if (type === 'string') {
-      // keywords and formats can make a difference but for now just look
-      // at enum and const.
-      if (validator) {
-        return [null, `string:${validator}`];
-      }
-      return ['string-type-checked', 'string'];
-    }
+    return this[method](args);
+  }
 
+  /*
+   * handle schema types number, integer, boolean.
+   */
+  scalar({type, validator}) {
+    // don't care about any keywords or formats but if constrained by
+    // an enum or const remove tracking.
+    if (validator) {
+      return [null, `${type}:${validator}`];
+    }
+    return ['alphanum', type];
+  }
+
+  /**
+   * handle schema type string.
+   */
+  string({validator}) {
+    // keywords and formats can make a difference but for now just look
+    // at enum and const.
+    if (validator) {
+      return [null, `string:${validator}`];
+    }
+    return ['string-type-checked', 'string'];
+  }
+
+  /**
+   * handle schema type array.
+   */
+  array({schema, target, validator, validations}) {
     // validation impacting tagging keywords: items, additionalItems
-    if (type === 'array') {
-      if (validator) {
-        return [null, `array:${validator} (TODO - walk array)`];
+    if (validator) {
+      return [null, `array:${validator} (TODO - walk array)`];
+    }
+
+    const {items, additionalItems} = schema;
+
+    if (!items) {
+      return ['?', 'array:items-not-specified'];
+    }
+    // if not an array then items is the schema by which all array elements
+    // are validated.
+    if (!Array.isArray(items)) {
+      for (let i = 0; i < target.length; i++) {
+        this.pathPush(i);
+        const result = this.eval(items, target[i]);
+        this.pathPop(result);
       }
-      return ['?', `array (TODO items, additionalItems)`];
+      return ['?', 'array:(applied single item schema)'];
     }
-
-    // it must be an object
-    if (type !== 'object') {
-      throw new Error(`Found ${type} when expecting object`);
+    // items is an array of schema by which the first items.length elements
+    // are evaluated.
+    const max = target.length > items.length ? items.length : target.length;
+    for (let i = 0; i < max; i++) {
+      this.pathPush(i);
+      const result = this.eval(items[i], target[i]);
+      this.pathPop(result);
     }
+    if (!additionalItems || target.length <= max) {
+      return ['?', 'array:(applied multi-item schema)'];
+    }
+    for (let i = max; i < target.length; i++) {
+      this.pathPush(i);
+      const result = this.eval(additionalItems, target[i]);
+      this.pathPop(result);
+    }
+    return ['?', 'array:(applied additionalItems)'];
+  }
 
-    // how to handle keywords?
-
+  /**
+   * handle schema type object
+   */
+  object({schema, target, validator, validations}) {
+    // TODO how to custom keywords? either attach property to return
+    // value or use async context.
     // TODO handle IF/THEN/ELSE and allOf/anyOf/oneOf
     //
     // if enum and properties exist then properties takes precedence if a prop
@@ -206,6 +262,7 @@ function rdeval(schema, target) {
     // the id isn't important - we'll use getSchema() to fetch any schemas. but
     // definitions can be refered to from within the schema so capture them.
     // question - are they global even if embedded in a lower level object?
+    // TODO must handle definitions section.
     if (definitions) {
       const evaluateDefinitions = () => null;
       evaluateDefinitions(definitions);
@@ -216,31 +273,8 @@ function rdeval(schema, target) {
     // if its value is equal to one of the elements in this keyword's array
     // value".
     if (validator) {
-      let validated = false;
-      const identical = new Array(validations.length);
-      for (let i = 0; i < validations.length; i++) {
-        const r = fastDeepEqual(validations[i], target);
-        if (r) {
-          identical[i] = validations[i];
-          validated = true;
-        }
-      }
-      // if one of the const/enum values resulted in the target being validated
-      // then the target must be walked to tag/untag values in the validations.
-      //
-      // this will walk both objects and arrays.
-      if (validated) {
-        for (const [object, key] of objectWalk(target)) {
-          if (typeof object[key] === 'string') {
-            action([null, `${validator}:${util.format(object)}[${key}]`]);
-          }
-        }
-        return ['?', 'enum:walked'];
-      } else {
-        throw new Error(`enum/const failed validation ${util.format(target)}`);
-      }
+      return this.enumerations({target, validator, validations});
     }
-
 
     // only properties that are in the schema can possibly be validated, so don't
     // consider properties that exist in the target but not the schema.
@@ -251,51 +285,91 @@ function rdeval(schema, target) {
       // if the property exists in the target then it might have been validated as
       // a string, an enum, or a const (or keyword or format).
       if (prop in target) {
-        propPathPush(prop);
-        const result = evaluate(properties[prop], target[prop]);
-        if (!Array.isArray(result)) {
-          throw new Error(`evaluate ${prop} returned ${result}`);
-        }
-        propPathPop(result);
-        //console.log(`result from evaluate() ${util.format(result)}`);
-        //action(prop, properties, target, result);
+        this.pathPush(prop);
+        const result = this.eval(properties[prop], target[prop]);
+        //if (!Array.isArray(result)) {
+        //  throw new Error(`evaluate ${prop} returned ${result}`);
+        //}
+        this.pathPop(result);
       }
     }
     // return something when an object is evaluated. this will not be used
     // because it's not possible to tag an object, but it assures that return
     // values are a consistent format.
     return ['?', '(evaluated-object)'];
+  }
 
-    function propPathPush(prop) {
-      propPath.push(prop);
-      const prefix = '\u2193'.repeat(propPath.length);
-      console.log(`${prefix} descending to ${propPath.join('.')}`);
-    }
-    function propPathPop(result) {
-      const n = propPath.length;
-      const prefix = '\u2191'.repeat(n);
-      const from = n ? propPath.join('.') : 'hmmm.';
-      propPath.pop();
-      action(result, n);
-      console.log(`${prefix} returning from ${from}`);
-    }
-    //
-    // this function becomes the tagging/tracking function
-    //
-    function action(result, n) {
-      const [tag, type, ...rest] = result;
-      const prefix = `${' '.repeat(2 * n)}\u2192`;
-      if (tag === null) {
-        console.log(`${prefix} REMOVE TRACKING (<${tag}>/${type})`);
-      } else if (tag === '?') {
-        console.log(`${prefix} ? NO CHANGE (${type})`);
-      } else {
-        console.log(`${prefix} ADD ${tag} (${type})`);
+  /**
+   * walk either an array or object and find the enumerated valid match. this
+   * must not be called unless there is a validator and validations.
+   *
+   * if enum or const then the object must be deeply compared against those,
+   * as opposed to descending and evaluating schemas. enum: "an instance
+   * validates if its value is equal to one of the elements in this keyword's
+   * array value". and const is just sugar for a one element enum.
+   */
+  enumerations({target, validator, validations}) {
+    let validated = false;
+    const identical = new Array(validations.length);
+    for (let i = 0; i < validations.length; i++) {
+      const r = fastDeepEqual(validations[i], target);
+      if (r) {
+        validated = true;
+        identical[i] = validations[i];
       }
+    }
+
+    if (!validated) {
+      return ['?', `${validator} failed validation: ${util.format(target)}`];
+    }
+
+    // if one of the const/enum values resulted in the target being validated
+    // then the target must be walked to tag/untag values in the validations.
+    //
+    // this will walk both objects and arrays.
+    for (const [object, key] of objectWalk(target)) {
+      if (typeof object[key] === 'string') {
+        this.action([null, `${validator}:${util.format(object)}[${key}]`]);
+      }
+    }
+    return ['?', 'enum:walked'];
+
+
+  }
+
+  pathPush(prop) {
+    this.path.push(prop);
+    const prefix = '\u2193'.repeat(this.path.length);
+    console.log(`${prefix} descending to ${this.path.join('.')}`);
+  }
+
+  pathPop(result) {
+    const n = this.path.length;
+    const prefix = '\u2191'.repeat(n);
+    const from = n ? this.path.join('.') : 'hmmm.';
+    this.path.pop();
+    this.action(result, n);
+    console.log(`${prefix} returning from ${from}`);
+  }
+  //
+  // this function becomes the tagging/tracking function
+  //
+  action(result, n) {
+    const [tag, type, ...rest] = result;
+    if (rest.length) {
+      throw new Error('found more result than expected');
+    }
+    const prefix = `${' '.repeat(2 * n)}\u2192`;
+    if (tag === null) {
+      console.log(`${prefix} REMOVE TRACKING (<${tag}>/${type})`);
+    } else if (tag === '?') {
+      console.log(`${prefix} ? NO CHANGE (${type})`);
+    } else {
+      console.log(`${prefix} ADD ${tag} (${type})`);
     }
   }
 }
 
 module.exports = {
-  rdeval,
+  Evaluator,
 };
