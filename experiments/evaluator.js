@@ -41,7 +41,8 @@ const keywords = {
 };
 
 class Evaluator {
-  constructor(schema) {
+  constructor(ajv, schema) {
+    this.ajv = ajv;
     this.schema = schema;
     this.path = [];
     // map each JSON Schema type to the method name for it
@@ -53,6 +54,16 @@ class Evaluator {
       ['array', 'array'],
       ['object', 'object']
     ]);
+  }
+
+  /**
+   * use ajv.getSchema to fetch a schema given the value of a $ref property.
+   */
+  getSchema(schema) {
+    // any truly remote reference that was required should have been fethced
+    // by ajv in order to validate, so using ajv.getSchema() will only fetch
+    // from cache.
+    return this.ajv.getSchema(schema);
   }
 
   /**
@@ -163,9 +174,27 @@ class Evaluator {
       validations = [schema.const]; // make it the array it's sugar for
     }
 
+    // finally see if it's a reference. there are these types:
+    // #/json-pointer - reference to self
+    // uri-ref - reference that can be fetched, not necessarily http
+    // uri-ref#/json-pointer - reference to uri-ref
+    // https://cswr.github.io/JsonSchema/spec/definitions_references/
+    //
+    // todo - should this be moved to the top? probably so.
+    if ('$ref' in schema) {
+      const refSchema = this.getSchema(schema.$ref);
+      if (!refSchema || !refSchema.schema) {
+        //  not sure how the validation could have succeeded, but
+        return ['?', '$ref: cannot resolve'];
+      }
+      // this is now the schema so use it.
+      return this.eval(refSchema.schema, target);
+    }
+
     const method = this.dispatch.get(type);
 
     if (!method) {
+      debugger
       // while testing, in production just return ['?', 'error']
       throw new Error(`Found ${type} when expecting valid schema type`);
     }
@@ -257,6 +286,8 @@ class Evaluator {
     // appears in properties first. if it does then that was the validation done
     // (if any). if it doesn't appear in properties AND there is an enum then the
     // entire object is trusted (because it passed an enum).
+    //
+    // draft 2019-09 definitions => $defs
     const {definitions, properties} = schema;
 
     // the id isn't important - we'll use getSchema() to fetch any schemas. but

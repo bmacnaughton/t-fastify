@@ -65,6 +65,10 @@ const anonymousSchema = {
     testArray: {
       type: 'array',
       items: {type: 'string'},
+    },
+    testArrayRef: {
+      type: 'array',
+      items: {$ref: 'addressSchema'},
     }
   }
 };
@@ -270,6 +274,7 @@ const rdeTests = [
       heihei: 'tuna',
     },
     testArray: ['bruce', 'a', 'macnaughton', 'jr'],
+    testArrayRef: [{address: {address: '507 South Delaware', zip: 74003}}]
   }}
 ];
 
@@ -287,7 +292,7 @@ for (const t of rdeTests) {
   const realSchema = validator.schema;
   console.log(`${bBlue}schema ${name} is ${util.format(realSchema)}${clear}`);
   const validation = validator(data);
-  const evaluator = new Evaluator(realSchema);
+  const evaluator = new Evaluator(ajv, realSchema);
   evaluator.evaluate(data);
   console.log(`[validation ${validation ? 'passed' : 'failed'}]`);
   if (!validation) {
