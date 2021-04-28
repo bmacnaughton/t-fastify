@@ -1,3 +1,4 @@
+'use strict';
 // generated from:
 /**
   const conflict2 = {
