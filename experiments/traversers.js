@@ -44,6 +44,15 @@ class Evaluator {
   constructor(schema) {
     this.schema = schema;
     this.path = [];
+    // map each JSON Schema type to the method name for it
+    this.dispatch = new Map([
+      ['boolean', 'scalar'],
+      ['number', 'scalar'],
+      ['integer', 'scalar'],
+      ['string', 'string'],
+      ['array', 'array'],
+      ['object', 'object']
+    ]);
   }
 
   /**
@@ -133,57 +142,79 @@ class Evaluator {
       return ['?', type];
     }
 
+    // arguments for schema-type specific method
+    const args = {type, schema, target};
+
     // check enum and const now because they cause any type to become untracked.
     // todo - should we do this when the value of const or at least one enum element
     // is an object? yes, we should not second-guess the user.
     let validator;
     let validations;
     // if both const and enum are present then const must be an element of
-    // enum or the validation would have failed. given the loose standard and the
-    // fact that const could a falsey value, check for the presence of enum and
-    // const as opposed to a truthy value.
+    // enum or the validation would have failed. given the loose standard and
+    // the fact that const could a falsey value (i.e. null), check for the
+    // presence of enum and const as opposed to a truthy value.
     if ('enum' in schema && Array.isArray(schema.enum)) {
       validator = 'enum';
       validations = schema.enum;
     }
     if ('const' in schema) {
       validator = 'const';
-      validations = [schema.const];
+      validations = [schema.const]; // make it the array it's sugar for
     }
 
-    if (type === 'number' || type === 'integer' || type === 'boolean') {
-      // don't care about any keywords or formats but if constrained by
-      // an enum or const remove tracking.
-      if (validator) {
-        return [null, `${type}:${validator}`];
-      }
-      return ['alphanum', type];
+    const method = this.dispatch.get(type);
+
+    if (!method) {
+      // while testing, in production just return ['?', 'error']
+      throw new Error(`Found ${type} when expecting valid schema type`);
+    }
+    if (validations) {
+      args.validator = validator;
+      args.validations = validations;
     }
 
-    if (type === 'string') {
-      // keywords and formats can make a difference but for now just look
-      // at enum and const.
-      if (validator) {
-        return [null, `string:${validator}`];
-      }
-      return ['string-type-checked', 'string'];
-    }
+    return this[method](args);
+  }
 
+  /*
+   * handle schema types number, integer, boolean.
+   */
+  scalar({type, validator}) {
+    // don't care about any keywords or formats but if constrained by
+    // an enum or const remove tracking.
+    if (validator) {
+      return [null, `${type}:${validator}`];
+    }
+    return ['alphanum', type];
+  }
+
+  /**
+   * handle schema type string.
+   */
+  string({validator}) {
+    // keywords and formats can make a difference but for now just look
+    // at enum and const.
+    if (validator) {
+      return [null, `string:${validator}`];
+    }
+    return ['string-type-checked', 'string'];
+  }
+
+  /**
+   * handle schema type array.
+   */
+  array({validator}) {
     // validation impacting tagging keywords: items, additionalItems
-    if (type === 'array') {
-      if (validator) {
-        return [null, `array:${validator} (TODO - walk array)`];
-      }
-      return ['?', 'array (TODO items, additionalItems)'];
+    if (validator) {
+      return [null, `array:${validator} (TODO - walk array)`];
     }
+    return ['?', 'array (TODO items, additionalItems)'];
+  }
 
-    // it must be an object
-    if (type !== 'object') {
-      throw new Error(`Found ${type} when expecting object`);
-    }
-
-    // how to handle keywords?
-
+  object({schema, target, validator, validations}) {
+    // TODO how to custom keywords? either attach property to return
+    // value or use async context.
     // TODO handle IF/THEN/ELSE and allOf/anyOf/oneOf
     //
     // if enum and properties exist then properties takes precedence if a prop
@@ -196,6 +227,7 @@ class Evaluator {
     // the id isn't important - we'll use getSchema() to fetch any schemas. but
     // definitions can be refered to from within the schema so capture them.
     // question - are they global even if embedded in a lower level object?
+    // TODO must handle definitions section.
     if (definitions) {
       const evaluateDefinitions = () => null;
       evaluateDefinitions(definitions);
@@ -211,8 +243,8 @@ class Evaluator {
       for (let i = 0; i < validations.length; i++) {
         const r = fastDeepEqual(validations[i], target);
         if (r) {
-          identical[i] = validations[i];
           validated = true;
+          identical[i] = validations[i];
         }
       }
       // if one of the const/enum values resulted in the target being validated
@@ -256,7 +288,6 @@ class Evaluator {
     // values are a consistent format.
     return ['?', '(evaluated-object)'];
   }
-
 
   pathPush(prop) {
     this.path.push(prop);
