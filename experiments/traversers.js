@@ -204,14 +204,49 @@ class Evaluator {
   /**
    * handle schema type array.
    */
-  array({validator}) {
+  array({schema, target, validator, validations}) {
     // validation impacting tagging keywords: items, additionalItems
     if (validator) {
       return [null, `array:${validator} (TODO - walk array)`];
     }
-    return ['?', 'array (TODO items, additionalItems)'];
+
+    const {items, additionalItems} = schema;
+
+    if (!items) {
+      return ['?', 'array:items-not-specified'];
+    }
+    // if not an array then items is the schema by which all array elements
+    // are validated.
+    if (!Array.isArray(items)) {
+      for (let i = 0; i < target.length; i++) {
+        this.pathPush(i);
+        const result = this.eval(items, target[i]);
+        this.pathPop(result);
+      }
+      return ['?', 'array:(applied single item schema)'];
+    }
+    // items is an array of schema by which the first items.length elements
+    // are evaluated.
+    const max = target.length > items.length ? items.length : target.length;
+    for (let i = 0; i < max; i++) {
+      this.pathPush(i);
+      const result = this.eval(items[i], target[i]);
+      this.pathPop(result);
+    }
+    if (!additionalItems || target.length <= max) {
+      return ['?', 'array:(applied multi-item schema)'];
+    }
+    for (let i = max; i < target.length; i++) {
+      this.pathPush(i);
+      const result = this.eval(additionalItems, target[i]);
+      this.pathPop(result);
+    }
+    return ['?', 'array:(applied additionalItems)'];
   }
 
+  /**
+   * handle schema type object
+   */
   object({schema, target, validator, validations}) {
     // TODO how to custom keywords? either attach property to return
     // value or use async context.
@@ -238,31 +273,8 @@ class Evaluator {
     // if its value is equal to one of the elements in this keyword's array
     // value".
     if (validator) {
-      let validated = false;
-      const identical = new Array(validations.length);
-      for (let i = 0; i < validations.length; i++) {
-        const r = fastDeepEqual(validations[i], target);
-        if (r) {
-          validated = true;
-          identical[i] = validations[i];
-        }
-      }
-      // if one of the const/enum values resulted in the target being validated
-      // then the target must be walked to tag/untag values in the validations.
-      //
-      // this will walk both objects and arrays.
-      if (validated) {
-        for (const [object, key] of objectWalk(target)) {
-          if (typeof object[key] === 'string') {
-            this.action([null, `${validator}:${util.format(object)}[${key}]`]);
-          }
-        }
-        return ['?', 'enum:walked'];
-      } else {
-        throw new Error(`enum/const failed validation ${util.format(target)}`);
-      }
+      return this.enumerations({target, validator, validations});
     }
-
 
     // only properties that are in the schema can possibly be validated, so don't
     // consider properties that exist in the target but not the schema.
@@ -275,18 +287,54 @@ class Evaluator {
       if (prop in target) {
         this.pathPush(prop);
         const result = this.eval(properties[prop], target[prop]);
-        if (!Array.isArray(result)) {
-          throw new Error(`evaluate ${prop} returned ${result}`);
-        }
+        //if (!Array.isArray(result)) {
+        //  throw new Error(`evaluate ${prop} returned ${result}`);
+        //}
         this.pathPop(result);
-        //console.log(`result from evaluate() ${util.format(result)}`);
-        //action(prop, properties, target, result);
       }
     }
     // return something when an object is evaluated. this will not be used
     // because it's not possible to tag an object, but it assures that return
     // values are a consistent format.
     return ['?', '(evaluated-object)'];
+  }
+
+  /**
+   * walk either an array or object and find the enumerated valid match. this
+   * must not be called unless there is a validator and validations.
+   *
+   * if enum or const then the object must be deeply compared against those,
+   * as opposed to descending and evaluating schemas. enum: "an instance
+   * validates if its value is equal to one of the elements in this keyword's
+   * array value". and const is just sugar for a one element enum.
+   */
+  enumerations({target, validator, validations}) {
+    let validated = false;
+    const identical = new Array(validations.length);
+    for (let i = 0; i < validations.length; i++) {
+      const r = fastDeepEqual(validations[i], target);
+      if (r) {
+        validated = true;
+        identical[i] = validations[i];
+      }
+    }
+
+    if (!validated) {
+      return ['?', `${validator} failed validation: ${util.format(target)}`];
+    }
+
+    // if one of the const/enum values resulted in the target being validated
+    // then the target must be walked to tag/untag values in the validations.
+    //
+    // this will walk both objects and arrays.
+    for (const [object, key] of objectWalk(target)) {
+      if (typeof object[key] === 'string') {
+        this.action([null, `${validator}:${util.format(object)}[${key}]`]);
+      }
+    }
+    return ['?', 'enum:walked'];
+
+
   }
 
   pathPush(prop) {
