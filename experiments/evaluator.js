@@ -114,7 +114,9 @@ class Evaluator {
     //  - uri-ref#/json-pointer - reference to uri-ref
     // https://cswr.github.io/JsonSchema/spec/definitions_references/
     //
-    // todo - should this be moved to the top? probably so.
+    // getSchema() resolves all forms of references afaict.
+    // TODO it's not clear whether it is valid to replace the $ref with the
+    // fetched schema.
     if ('$ref' in schema) {
       const refSchema = this.getSchema(schema.$ref);
       if (!refSchema || !refSchema.schema) {
@@ -125,8 +127,18 @@ class Evaluator {
       return this.eval(refSchema.schema, target);
     }
 
-    // now both the target and the schema both have to be considered; they're
-    // not independent any longer.
+    //
+    // the schema is an object. this is the only valid type of schema other
+    // than boolean, which unconditionally passes or fails.
+    //
+    // possible types specified by the schema:
+    //  - null, boolean, object, array, number, integer, string
+    //
+    const {type} = schema;
+
+
+    //
+    // now both the target and the schema type have to be compatible.
     //
     // if the target is an object it must be evaluated against the schema to
     // determine what properties (at any depth) might have been validated.
@@ -138,33 +150,11 @@ class Evaluator {
     // if the target is a number the schema must be checked to see if an integer
     // was specified?
     //
-    // if the target is a boolean then the schema doesn't matter. we can add
-    // alphanum. if the value has been coerced or is a natural boolean then it
-    // just won't be tagged.
+    // if the target is a boolean, float, or integer then the schema doesn't
+    // matter. add the "alphanum" tag; if the value was a string and has been
+    // coerced or was a natural boolean or number then it won't be tagged.
     //
-
-    //
-    // the schema is an object. this is the only useful case.
-    //
-    // possible types: null, boolean, object, array, number, integer, string
-    //
-    //
-    const {type} = schema;
-
-    const allowed = () => {
-      if (type === typeof target) {
-        return true;
-      }
-      if (!(type === 'integer' && typeof target === 'number')) {
-        return true;
-      }
-      if (!(type === 'array' && Array.isArray(target))) {
-        return true;
-      }
-      return false;
-    };
-
-    if (!allowed()) {
+    if (!this.typesAreCompatible(type, target)) {
       // TODO consider logging because this code should only be called if the
       // validation succeeded and yet this target is the wrong type. it must mean
       // that the logic behind this approach is flawed.
@@ -172,12 +162,11 @@ class Evaluator {
       return ['?', type];
     }
 
-    // arguments for schema-type specific method
+    // arguments for schema-type specific method. type is needed because all
+    // scalars are handled by a single method.
     const args = {type, schema, target};
 
-    // check enum and const now because they cause any type to become untracked.
-    // todo - should we do this when the value of const or at least one enum element
-    // is an object? yes, we should not second-guess the user.
+    // check enum and const now because they cause any type to be untracked.
     let validator;
     let validations;
     // if both const and enum are present then const must be an element of
@@ -193,13 +182,15 @@ class Evaluator {
       validations = [schema.const]; // make it the array it's sugar for
     }
 
+    // get the type-specific method to execute.
     const method = this.dispatch.get(type);
 
     if (!method) {
-      debugger
-      // while testing throw; in production just return ['?', 'error']
+      debugger;
+      // while developing throw; in production just return ['?', 'error']
       throw new Error(`Found ${type} when expecting valid schema type`);
     }
+    // add validations if present.
     if (validations) {
       args.validator = validator;
       args.validations = validations;
@@ -243,11 +234,14 @@ class Evaluator {
 
     const {items, additionalItems} = schema;
 
+    // if no items then the array passes validation automatically, so
+    // nothing can be inferred.
     if (!items) {
       return ['?', 'array:items-not-specified'];
     }
-    // if not an array then items is the schema by which all array elements
-    // are validated.
+
+    // if items is not an array then items is the schema by which all array
+    // elements are validated.
     if (!Array.isArray(items)) {
       for (let i = 0; i < target.length; i++) {
         this.pathPush(i);
@@ -256,6 +250,8 @@ class Evaluator {
       }
       return ['?', 'array:(applied single item schema)'];
     }
+
+
     // items is an array of schema by which the first items.length elements
     // are evaluated.
     const max = target.length > items.length ? items.length : target.length;
@@ -264,12 +260,23 @@ class Evaluator {
       const result = this.eval(items[i], target[i]);
       this.pathPop(result);
     }
+    // and additionalItems, if present it's either a schema for validating
+    // additional items or an array of schemas for doing so.
     if (!additionalItems || target.length <= max) {
       return ['?', 'array:(applied multi-item schema)'];
     }
-    for (let i = max; i < target.length; i++) {
+
+    const isArray = Array.isArray(additionalItems);
+    const uncheckedCount = target.length - max;
+    // if it's not an array then all the target array elements will be checked.
+    let nextMax = uncheckedCount;
+    if (isArray && additionalItems.length < uncheckedCount) {
+      nextMax = additionalItems.length;
+    }
+
+    for (let i = max; i < nextMax; i++) {
       this.pathPush(i);
-      const result = this.eval(additionalItems, target[i]);
+      const result = this.eval(isArray ? additionalItems[i] : additionalItems, target[i]);
       this.pathPop(result);
     }
     return ['?', 'array:(applied additionalItems)'];
@@ -365,6 +372,23 @@ class Evaluator {
     return ['?', 'enum:walked'];
 
 
+  }
+
+  /**
+   * @returns {boolean} - schema type compatible with target type
+   */
+  typesAreCompatible(type, target) {
+    if (type === typeof target) {
+      return true;
+    }
+    if (!(type === 'integer' && typeof target === 'number')) {
+      return true;
+    }
+    if (!(type === 'array' && Array.isArray(target))) {
+      return true;
+    }
+
+    return false;
   }
 
   pathPush(prop) {

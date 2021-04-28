@@ -69,6 +69,12 @@ const anonymousSchema = {
     testArrayRef: {
       type: 'array',
       items: {$ref: 'addressSchema'},
+      additionalItems: {type: 'string', const: 'should be ignored'},
+    },
+    testMultiArrayRef: {
+      type: 'array',
+      items: [{type: 'string'}, {type: 'number'}],
+      additionalItems: {type: 'integer'},
     }
   }
 };
@@ -274,7 +280,12 @@ const rdeTests = [
       heihei: 'tuna',
     },
     testArray: ['bruce', 'a', 'macnaughton', 'jr'],
-    testArrayRef: [{address: {address: '507 South Delaware', zip: 74003}}]
+    testArrayRef: [{address: {address: '507 South Delaware', zip: 74003}}],
+    testMultiArrayRef: [
+      'string',
+      3.141592654,
+      42, 42, 42,
+    ],
   }}
 ];
 
