@@ -60,9 +60,9 @@ class Evaluator {
    * use ajv.getSchema to fetch a schema given the value of a $ref property.
    */
   getSchema(schema) {
-    // any truly remote reference that was required should have been fethced
-    // by ajv in order to validate, so using ajv.getSchema() will only fetch
-    // from cache.
+    // any truly remote reference that was required should have been fetched
+    // by ajv in order to validate, so using ajv.getSchema() should fetch from
+    // cache.
     return this.ajv.getSchema(schema);
   }
 
@@ -104,6 +104,25 @@ class Evaluator {
     // non-conforming schema.
     if (Array.isArray(schema)) {
       return ['?', `(invalid-schema: ${schema})`];
+    }
+
+    // see if it's a reference. all the examples i can find show an object
+    // with a single property, $ref, e.g., {$ref: 'reference'}
+    // reference is one of these:
+    //  - #/json-pointer - reference to self
+    //  - uri-ref - reference that can be fetched, not necessarily http
+    //  - uri-ref#/json-pointer - reference to uri-ref
+    // https://cswr.github.io/JsonSchema/spec/definitions_references/
+    //
+    // todo - should this be moved to the top? probably so.
+    if ('$ref' in schema) {
+      const refSchema = this.getSchema(schema.$ref);
+      if (!refSchema || !refSchema.schema) {
+        //  not sure how the validation could have succeeded, but
+        return ['?', '$ref: cannot resolve'];
+      }
+      // no push/pop because the target hasn't changed.
+      return this.eval(refSchema.schema, target);
     }
 
     // now both the target and the schema both have to be considered; they're
@@ -174,28 +193,11 @@ class Evaluator {
       validations = [schema.const]; // make it the array it's sugar for
     }
 
-    // finally see if it's a reference. there are these types:
-    // #/json-pointer - reference to self
-    // uri-ref - reference that can be fetched, not necessarily http
-    // uri-ref#/json-pointer - reference to uri-ref
-    // https://cswr.github.io/JsonSchema/spec/definitions_references/
-    //
-    // todo - should this be moved to the top? probably so.
-    if ('$ref' in schema) {
-      const refSchema = this.getSchema(schema.$ref);
-      if (!refSchema || !refSchema.schema) {
-        //  not sure how the validation could have succeeded, but
-        return ['?', '$ref: cannot resolve'];
-      }
-      // this is now the schema so use it.
-      return this.eval(refSchema.schema, target);
-    }
-
     const method = this.dispatch.get(type);
 
     if (!method) {
       debugger
-      // while testing, in production just return ['?', 'error']
+      // while testing throw; in production just return ['?', 'error']
       throw new Error(`Found ${type} when expecting valid schema type`);
     }
     if (validations) {
@@ -318,9 +320,6 @@ class Evaluator {
       if (prop in target) {
         this.pathPush(prop);
         const result = this.eval(properties[prop], target[prop]);
-        //if (!Array.isArray(result)) {
-        //  throw new Error(`evaluate ${prop} returned ${result}`);
-        //}
         this.pathPop(result);
       }
     }
@@ -381,6 +380,7 @@ class Evaluator {
     this.path.pop();
     this.action(result, n);
     console.log(`${prefix} returning from ${from}`);
+    return result;
   }
   //
   // this function becomes the tagging/tracking function
