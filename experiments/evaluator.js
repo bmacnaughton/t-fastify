@@ -248,7 +248,7 @@ class Evaluator {
         const result = this.eval(items, target[i]);
         this.pathPop(result);
       }
-      return ['?', 'array:(applied single item schema)'];
+      return ['?', 'array:(applied items schema)'];
     }
 
 
@@ -260,10 +260,11 @@ class Evaluator {
       const result = this.eval(items[i], target[i]);
       this.pathPop(result);
     }
-    // and additionalItems, if present it's either a schema for validating
+
+    // additionalItems, if present is either a schema for validating
     // additional items or an array of schemas for doing so.
     if (!additionalItems || target.length <= max) {
-      return ['?', 'array:(applied multi-item schema)'];
+      return ['?', 'array:(applied [items] schema)'];
     }
 
     const isArray = Array.isArray(additionalItems);
@@ -271,12 +272,14 @@ class Evaluator {
     // if it's not an array then all the target array elements will be checked.
     let nextMax = uncheckedCount;
     if (isArray && additionalItems.length < uncheckedCount) {
+      // it's an array so only check what is specified.
       nextMax = additionalItems.length;
     }
 
     for (let i = max; i < nextMax; i++) {
       this.pathPush(i);
-      const result = this.eval(isArray ? additionalItems[i] : additionalItems, target[i]);
+      const item = isArray ? additionalItems[i] : additionalItems;
+      const result = this.eval(item, target[i]);
       this.pathPop(result);
     }
     return ['?', 'array:(applied additionalItems)'];
