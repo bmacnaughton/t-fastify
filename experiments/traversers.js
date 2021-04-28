@@ -1,11 +1,14 @@
 'use strict';
 
+/* eslint-disable no-console */
+
 const util = require('util');
 const fastDeepEqual = require('fast-deep-equal');
 const objectWalk = require('./object-walk');
 
 // https://tools.ietf.org/html/draft-handrews-json-schema-validation-01#page-13
 
+// eslint-disable-next-line no-unused-vars
 const keywords = {
   any: [
     'type',         // string | atring[] enum: null, boolean, object, array, number, string, integer
@@ -36,52 +39,6 @@ const keywords = {
   group: ['allOf', 'anyOf', 'oneOf', 'not'],
   semantic: ['format'],
 };
-
-let schemaDepth = 0;
-let lastJSONPtr = -1;     // impossible value
-let state = 'root';
-
-function homeGrown (schema, JSONPtr, rootSchema, parentJSONPtr, parentKeyword, parentSchema, indexProp) {
-  let prefix = '';
-  switch (state) {
-    case 'root':
-      if (typeof schema === 'boolean') {
-        console.log(`this schema always ${schema ? 'succeeds' : 'fails'}`);
-        // there is nothing more to this schema
-        return;
-      }
-      const id = schema.$id;
-      const type = schema.type;
-      const otherKeys = Object.getOwnPropertyNames(schema).filter(k => !~['$id', 'type'].indexOf(k));
-
-      console.log(`$id: ${id} type ${type} ${otherKeys}`);
-      for (const k of otherKeys) {
-        console.log(`  ${k}: ${schema[k]}`);
-      }
-      schemaDepth += 1;
-      state = 'scan';
-      break;
-    case 'scan':
-      if (JSONPtr.startsWith(lastJSONPtr)) {
-        prefix = `${' '.repeat(schemaDepth * 2)}--> `;
-        //schemaDepth += 1;
-        state = 'in-schema';
-      } else {
-        lastJSONPtr = JSONPtr;
-      }
-      console.log(`${prefix}${JSONPtr}:`, schema);
-      break;
-    case 'in-schema':
-      if (!JSONPtr.startsWith(lastJSONPtr)) {
-        //schemaDepth -= 1;
-        state = 'scan';
-        break;
-      }
-      prefix = `${' '.repeat(schemaDepth * 2)}--> `;
-      console.log(`${prefix}${JSONPtr}:`, schema);
-      break;
-  }
-}
 
 function rdeval(schema, target) {
   const root = schema;
@@ -117,13 +74,11 @@ function rdeval(schema, target) {
    * @param target - the target to be checked against the schema
    * @returns ['validation-type', 'validator']
    */
-  function evaluate (schema, target) {
-    console.log(`evaluate data "${util.format(target)}" using schema ${util.format(schema)}`);
-
+  function evaluate(schema, target) {
     // this provides no validation of any sort; it either always passes
     // or always fails.
     if (typeof schema === 'boolean') {
-      return booleanSchema(target);
+      return ['?', 'schema:boolean'];
     }
     // if it's not an object then ajv should not have validated the schema, so
     // it's not clear how we got here.
@@ -138,7 +93,7 @@ function rdeval(schema, target) {
     // schema, so just return the 'no modifications' question mark and the
     // non-conforming schema.
     if (Array.isArray(schema)) {
-      return ['?', `(invalid: ${schema})];
+      return ['?', `(invalid: ${schema})`];
     }
 
     // now both the target and the schema both have to be considered; they're
@@ -162,11 +117,29 @@ function rdeval(schema, target) {
     //
     // the schema is an object. this is the only useful case.
     //
-    let {type} = schema;
-    if (type !== typeof target && type !== 'integer') {
+    // possible types: null, boolean, object, array, number, integer, string
+    //
+    //
+    const {type} = schema;
+
+    const allowed = () => {
+      if (type === typeof target) {
+        return true;
+      }
+      if (!(type === 'integer' && typeof target === 'number')) {
+        return true;
+      }
+      if (!(type === 'array' && Array.isArray(target))) {
+        return true;
+      }
+      return false;
+    };
+
+    if (!allowed()) {
       // TODO consider logging because this code should only be called if the
       // validation succeeded and yet this target is the wrong type. it must mean
       // that the logic behind this approach is flawed.
+      // (also, it could mean that coercion is active and the value was coerced.)
       return ['?', type];
     }
 
@@ -206,6 +179,14 @@ function rdeval(schema, target) {
       return ['string-type-checked', 'string'];
     }
 
+    // validation impacting tagging keywords: items, additionalItems
+    if (type === 'array') {
+      if (validator) {
+        return [null, `array:${validator} (TODO - walk array)`];
+      }
+      return ['?', `array (TODO items, additionalItems)`];
+    }
+
     // it must be an object
     if (type !== 'object') {
       throw new Error(`Found ${type} when expecting object`);
@@ -226,6 +207,7 @@ function rdeval(schema, target) {
     // definitions can be refered to from within the schema so capture them.
     // question - are they global even if embedded in a lower level object?
     if (definitions) {
+      const evaluateDefinitions = () => null;
       evaluateDefinitions(definitions);
     }
 
@@ -235,7 +217,7 @@ function rdeval(schema, target) {
     // value".
     if (validator) {
       let validated = false;
-      let identical = new Array(validations.length);
+      const identical = new Array(validations.length);
       for (let i = 0; i < validations.length; i++) {
         const r = fastDeepEqual(validations[i], target);
         if (r) {
@@ -245,6 +227,8 @@ function rdeval(schema, target) {
       }
       // if one of the const/enum values resulted in the target being validated
       // then the target must be walked to tag/untag values in the validations.
+      //
+      // this will walk both objects and arrays.
       if (validated) {
         for (const [object, key] of objectWalk(target)) {
           if (typeof object[key] === 'string') {
@@ -256,6 +240,7 @@ function rdeval(schema, target) {
         throw new Error(`enum/const failed validation ${util.format(target)}`);
       }
     }
+
 
     // only properties that are in the schema can possibly be validated, so don't
     // consider properties that exist in the target but not the schema.
@@ -281,60 +266,36 @@ function rdeval(schema, target) {
     // values are a consistent format.
     return ['?', '(evaluated-object)'];
 
-    function propPathPush (prop) {
+    function propPathPush(prop) {
       propPath.push(prop);
-      const prefix = '\u2193'.repeat(propPath.length + 1);
+      const prefix = '\u2193'.repeat(propPath.length);
       console.log(`${prefix} descending to ${propPath.join('.')}`);
     }
-    function propPathPop (result) {
-      const prefix = '\u2191'.repeat(propPath.length + 1);
-      const from = propPath.length ? propPath.join('.') : 'hmmm.';
+    function propPathPop(result) {
+      const n = propPath.length;
+      const prefix = '\u2191'.repeat(n);
+      const from = n ? propPath.join('.') : 'hmmm.';
       propPath.pop();
-      action(result);
+      action(result, n);
       console.log(`${prefix} returning from ${from}`);
     }
     //
     // this function becomes the tagging/tracking function
     //
-    function action (result) {
+    function action(result, n) {
       const [tag, type, ...rest] = result;
+      const prefix = `${' '.repeat(2 * n)}\u2192`;
       if (tag === null) {
-        console.log(`-> REMOVE TRACKING (<${tag}>/${type})`);
+        console.log(`${prefix} REMOVE TRACKING (<${tag}>/${type})`);
       } else if (tag === '?') {
-        console.log(`-> ? NO CHANGE (${type})`);
+        console.log(`${prefix} ? NO CHANGE (${type})`);
       } else {
-        console.log(`-> ADD ${tag} (${type})`);
+        console.log(`${prefix} ADD ${tag} (${type})`);
       }
     }
   }
 }
 
-function schemaType(thing) {
-  if (typeof thing !== 'object') {
-    return typeof thing;
-  }
-  return Array.isArray(thing) ? 'array' : 'object';
-}
-
-// boolean schema just passes or fails; nothing is known about target.
-function booleanSchema(target) {
-  return ['?', schemaType(target)];
-}
-//
-// this function becomes the tagging/tracking function
-//
-function action(prop, schema, target, result) {
-  const [tag, type, ...rest] = result;
-  if (tag === null) {
-    console.log(`-> REMOVE TRACKING (<${tag}>/${type})`);
-  } else if (tag === '?') {
-    console.log(`-> ? NO CHANGE`);
-  } else {
-    console.log(`-> ADD ${tag} (${type})`);
-  }
-}
-
 module.exports = {
-  homeGrown,
   rdeval,
-}
+};

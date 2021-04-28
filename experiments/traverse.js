@@ -1,19 +1,19 @@
 'use strict';
 
+/* eslint-disable no-console */
+
 const util = require('util');
 
 const Ajv = require('ajv');
 
-const traverse = require('json-schema-traverse');
-const {homeGrown, rdeval} = require('./traversers');
-const {walkJSONSchema} = require('./walkers');
+const {rdeval} = require('./traversers');
 
 const addressSchema = {
   $id: 'addressSchema',
   type: 'object',
   definitions: {
     random: {
-      type: "integer",
+      type: 'integer',
       minimum: 0, maximum: 100,
     },
     random0: false,
@@ -56,16 +56,18 @@ const anonymousSchema = {
         points: {type: 'integer'},
       }
     },
-    "check-enum": {
+    'check-enum': {
       type: 'object',
       enum: [
         {bruce: 'wenxin', heihei: 'tuna'},
       ],
+    },
+    testArray: {
+      type: 'array',
+      items: {type: 'string'},
     }
   }
 };
-
-const failingSchema = false;
 
 const bodyJsonSchema = {
   $id: 'bodyJSONSchema',        // not returned as separate items
@@ -111,7 +113,7 @@ const conflict = {
   required: ['x'],
   // properties take precedence over enum if both specify a given key
   properties: {
-     x: {type: 'integer'}
+    x: {type: 'integer'}
   }
 };
 
@@ -151,7 +153,7 @@ const simpleNumber = {
 const simpleString = {
   $id: 'simpleString',
   type: 'string',
-}
+};
 
 //*
 
@@ -184,10 +186,10 @@ for (const schema in schemas) {
 //
 const schemaTests = [
   {schema: 'bodyJSONSchema', data: {
-      requiredKey: [1, 2, 3],
-      addresses: {address: 'bruce lane', zip: 9},
-      //emptyRef: {x: 'bruce'},
-      weird: {randomKey: 777},
+    requiredKey: [1, 2, 3],
+    addresses: {address: 'bruce lane', zip: 9},
+    //emptyRef: {x: 'bruce'},
+    weird: {randomKey: 777},
   }},
   {schema: 'addressSchema', data: {
     address: {address: 'bruce lane', zip: 98098}, randomKey: 7
@@ -266,16 +268,24 @@ const rdeTests = [
     'check-enum': {
       bruce: 'wenxin',
       heihei: 'tuna',
-    }
+    },
+    testArray: ['bruce', 'a', 'macnaughton', 'jr'],
   }}
 ];
 
+const bRed = '\u001b[31;1m';
+const bBlue = '\u001b[34;1m';
+const clear = '\u001b[0m';
 for (const t of rdeTests) {
   const {schema, data, skip} = t;
+  if (skip) {
+    continue;
+  }
   const name = schema || 'anonymous';
-  console.log(`[using ${name} to validate %o]`, data);
+  console.log(`${bRed}[using ${name} to validate${clear} %o]`, data);
   const validator = ajv.getSchema(schema);
   const realSchema = validator.schema;
+  console.log(`${bBlue}schema ${name} is ${util.format(realSchema)}${clear}`);
   const validation = validator(data);
   rdeval(realSchema, data);
   console.log(`[validation ${validation ? 'passed' : 'failed'}]`);
@@ -286,6 +296,10 @@ for (const t of rdeTests) {
 
 
 /*
+const traverse = require('json-schema-traverse');
+const {homeGrown} = require('./schema-traversal');
+const {walkJSONSchema} = require('./walkers');
+
 const options = {pre: homeGrown};
 console.log(`${options.pre ? 'pre' : 'post'}-traversal`);
 
