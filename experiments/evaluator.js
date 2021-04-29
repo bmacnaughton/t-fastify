@@ -10,7 +10,8 @@ const objectWalk = require('./object-walk');
 // https://tools.ietf.org/html/draft-handrews-json-schema-validation-01#page-13
 // TODO support 2019-09 https://json-schema.org/draft/2019-09/release-notes.html
 
-
+// i don't think the keywords are needed but i'm going to leave them here
+// until i get through the code without needing them.
 // eslint-disable-next-line no-unused-vars
 const keywords = {
   any: [
@@ -49,7 +50,12 @@ class Evaluator {
     this.schemaName = schema;
     this.schema = schemaObject;
     this.path = [];
-    // map each JSON Schema type to the method name for it
+
+    // used to avoid 1) recreating regexes and 2) relying on ajv's internal
+    // cache of regexes.
+    // they're in the ajv.scope._values.pattern.get(regex-string).value.ref
+    // but that seems like a very specific implementation detail to rely on.
+    this.regexCache = new Map();
   }
 
   /**
@@ -209,7 +215,7 @@ class Evaluator {
     // because it has lost the addressSchema context.
     //
     // so walk loaded $ref objects and convert relative references to absolute references so
-    // that ajv.getSchema() can resolve them.
+    // that ajv.getSchema() will resolve them.
     //
     const schemaValidationFunction = this.ajv.getSchema(schema);
     if (!schemaValidationFunction) {
@@ -333,17 +339,11 @@ class Evaluator {
     // (if any). if it doesn't appear in properties AND there is an enum then the
     // entire object is trusted (because it passed an enum).
     //
-    // draft 2019-09 definitions => $defs (but much bigger changes too)
-    const {definitions, properties} = schema;
-
-    // the id isn't important - we'll use getSchema() to fetch any schemas. but
-    // definitions can be refered to from within the schema so capture them.
-    // question - are they global even if embedded in a lower level object?
-    // TODO must handle definitions section.
-    if (definitions) {
-      const evaluateDefinitions = () => null;
-      evaluateDefinitions(definitions);
-    }
+    // draft 2019-09 definitions => $defs (but much bigger changes too). it
+    // doesn't appear that definitions or $defs is used directly; it's just
+    // a "standard" place to put reusable definitions but a JSON pointer can
+    // reference a definition anywhere, so ignore definitions.
+    const {properties, patternProperties, additionalProperties} = schema;
 
     // if enum or const then the object must be deeply compared against those,
     // as opposed to descending and evaluating schemas. "an instance validates
@@ -353,6 +353,7 @@ class Evaluator {
       return this.enumerations({target, validator, validations});
     }
 
+    const propsSeen = new Map();
     // only properties that are in the schema can possibly be validated, so don't
     // consider properties that exist in the target but not the schema.
     for (const prop in properties) {
@@ -365,8 +366,50 @@ class Evaluator {
         this.pathPush(prop);
         const result = this.eval(properties[prop], target[prop]);
         this.pathPop(result);
+        // add to properties seen
+        propsSeen.set(prop, true);
       }
     }
+
+    // TODO it's possible that pattern properties specifies the same prop
+    // and specifies a more restrictive schema, but that causes a strict
+    // mode error and significantly complicates this logic, so defer it
+    // until hopefully it's not an issue in the future because strict mode
+    // is "normal".
+    //
+    // now do patternProperties. when ajv executes with {strict: 'log'} option
+    // it logs what would be errors if {strict: true} or ignored if {strict: false}.
+    // if a patternProperties key matches a properties key it is a strict mode
+    // error, so the schema wouldn't compile, but ignoring it allows the two
+    // to specify mutually exclusive validation criteria.
+    if (patternProperties) {
+      for (const prop in target) {
+        if (propsSeen.get(prop)) {
+          continue;
+        }
+        for (const schema of this.matching(patternProperties, prop)) {
+          this.pathPush(prop);
+          const result = this.eval(schema, target[prop]);
+          this.pathPop(result);
+          // add to properties seen
+          propsSeen.set(prop, true);
+        }
+      }
+    }
+
+    // now come additionalProperties
+    if (additionalProperties) {
+      for (const prop in target) {
+        // only look at props not seen
+        if (propsSeen.get(prop)) {
+          continue;
+        }
+        this.pathPush(prop);
+        const result = this.eval(additionalProperties, target[prop]);
+        this.pathPop(result);
+      }
+    }
+
     // return something when an object is evaluated. this will not be used
     // because it's not possible to tag an object, but it assures that return
     // values are a consistent format.
@@ -428,6 +471,27 @@ class Evaluator {
     return false;
   }
 
+  *matching(patternProps, prop) {
+    for (const [key, value] of Object.entries(patternProps)) {
+      let re = this.regexCache.get(key);
+      if (re === null) {
+        continue;
+      }
+      if (!re) {
+        try {
+          re = new RegExp(key);
+          this.regexCache.set(key, re);
+        } catch (e) {
+          this.regexCache.set(key, null);
+          continue;
+        }
+      }
+      if (re.test(prop)) {
+        yield value;
+      }
+    }
+  }
+
   pathPush(prop) {
     this.path.push(prop);
     const prefix = '\u2193'.repeat(this.path.length);
@@ -464,6 +528,7 @@ class Evaluator {
   }
 }
 
+// map each JSON Schema type to the method name for it
 Evaluator.dispatch = new Map([
   ['boolean', 'scalar'],
   ['number', 'scalar'],

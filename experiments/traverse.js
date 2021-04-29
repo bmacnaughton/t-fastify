@@ -175,6 +175,17 @@ const simpleString = {
   type: 'string',
 };
 
+const withPatternProps = {
+  $id: 'withPatternProps',
+  type: 'object',
+  properties: {
+    Prop1: {type: 'string'},
+  },
+  patternProperties: {
+    '^prop.$': {type: 'number'},
+  },
+};
+
 //*
 
 //
@@ -195,6 +206,7 @@ const schemas = {
   noConflict,
   simpleNumber,
   simpleString,
+  withPatternProps,
 };
 for (const schema in schemas) {
   console.log(`[adding schema ${schema}]`);
@@ -241,9 +253,10 @@ const schemaTests = [
 ];
 
 let v;
-const skipSchemaTests = true;
+const skipSchemaTests = withPatternProps;
 for (const t of schemaTests) {
-  if (skipSchemaTests) {
+  if (skipSchemaTests && skipSchemaTests !== withPatternProps) {
+    console.log(`% skipping ${name}`);
     continue;
   }
   const {schema, data, skip} = t;
@@ -256,7 +269,7 @@ for (const t of schemaTests) {
   const validatorFunc = ajv.getSchema(schema);
   //const result = ajv.validate(schema, data);
   const result = validatorFunc(data);
-  if (schema === 'conflict3x') {
+  if (schema === 'x-withPatternProps') {
     v = validatorFunc;
   }
   console.log(`-> ${result ? 'passed' : 'failed'}`);
@@ -298,13 +311,23 @@ const rdeTests = [
     ],
     aPointerRef: 99887,
     internalRef: 'internal',
-  }}
+  }},
+  {schema: 'withPatternProps', data: {
+    Prop1: 'i am a string',
+    propX: 99,
+    propY: 77,
+  }},
 ];
 
 const bRed = '\u001b[31;1m';
 const bBlue = '\u001b[34;1m';
 const clear = '\u001b[0m';
+
+const skipRdeTests = false;
 for (const t of rdeTests) {
+  if (skipRdeTests) {
+    continue;
+  }
   const {schema, data, skip} = t;
   if (skip) {
     continue;
@@ -319,7 +342,7 @@ for (const t of rdeTests) {
   const validation = validator(data);
   const evaluator = new Evaluator(ajv, schema, schemaObject);
   evaluator.evaluate(data);
-  console.log(`[validation ${validation ? 'passed' : 'failed'}]`);
+  console.log(`[schema validation ${validation ? 'passed' : 'failed'}]`);
   if (!validation) {
     util.format(`-> ${validator.errors}`);
   }

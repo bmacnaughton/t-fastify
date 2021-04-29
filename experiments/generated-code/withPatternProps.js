@@ -8,6 +8,21 @@
 // this has properties and patternProperties.
 // the code checks properties followed by patternProperties, so if they contradict one
 // another the validation will always fail.
+
+/**
+ * schema generating this code:
+ *
+  const withPatternProps = {
+  $id: 'withPatternProps',
+  type: 'object',
+  properties: {
+    prop1: {type: 'string'},
+  },
+  patternProperties: {
+    '^propX$': {type: 'number'},
+  },
+};
+ */
 function validate21 (
   data,
   {instancePath = "", parentData, parentDataProperty, rootData = data} = {}
