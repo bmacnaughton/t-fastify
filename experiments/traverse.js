@@ -46,8 +46,8 @@ const looseAddressSchema = {
 // multiple unnamed schema throw - duplicate ID: ''
 const anonymousSchema = {
   type: 'object',
-  definitions: {
-
+  $defs: {
+    internal: {type: 'string', const: 'internal'},
   },
   properties: {
     splish: {type: 'string'},
@@ -85,6 +85,7 @@ const anonymousSchema = {
       additionalItems: {type: 'integer'},
     },
     aPointerRef: {$ref: 'addressSchema#/definitions/positive'},
+    internalRef: {$ref: '#/$defs/internal'},
   }
 };
 
@@ -296,6 +297,7 @@ const rdeTests = [
       42, 42, 42,
     ],
     aPointerRef: 99887,
+    internalRef: 'internal',
   }}
 ];
 

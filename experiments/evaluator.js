@@ -53,41 +53,6 @@ class Evaluator {
   }
 
   /**
-   * use ajv.getSchema to fetch a schema given the value of a property.
-   */
-  getSchema(schema) {
-    // any truly remote reference that was required should have been fetched
-    // by ajv in order to validate, so using ajv.getSchema() should fetch from
-    // cache.
-
-    // consider:
-    // addressSchema defines {$defs: {street: {...}}}
-    // addressSchema references it: {streetAddress: {$ref: '#/$defs/street/}}
-    // userSchema has a reference to addressSchema: {address: {$ref: 'addressSchema#/streetAddress}}
-    //
-    // when userSchema references addressSchema#/streetAddress it loads {$ref: '#/$defs/street'}.
-    // when userSchema sees '#/$defs/street' it tries to dereference it as a *local* reference
-    // because it has lost the addressSchema context.
-    //
-    // so walk loaded $ref objects and convert relative references to absolute references so
-    // that ajv.getSchema() can resolve them.
-    //
-    const schemaValidationFunction = this.ajv.getSchema(schema);
-    if (!schemaValidationFunction) {
-      return undefined;
-    }
-    const schemaReference = schemaValidationFunction.schema;
-    for (const [object, key] of objectWalk(schemaReference)) {
-      // is it a relative reference in the context of the just loaded schema?
-      if (key === '$ref' && object[key][0] === '#') {
-        // yes, make it an absolute reference.
-        object[key] = `${schema}${object[key]}`;
-      }
-    }
-    return schemaValidationFunction;
-  }
-
-  /**
    * this function returns the type of schema that was used to validate as
    * well as the validator in the schema. in some cases it needs to do evaluation
    * in order to determine which element of the schema resulted in the passing the
@@ -142,17 +107,6 @@ class Evaluator {
 
     // see if it's a reference. all the examples i can find show an object
     // with a single property, $ref, e.g., {$ref: 'reference'}
-    // reference is one of these:
-    //  1) #/json-pointer - reference to self
-    //  2) uri-ref - reference that can be fetched, not necessarily http
-    //  3) uri-ref#/json-pointer - reference to uri-ref
-    // https://cswr.github.io/JsonSchema/spec/definitions_references/
-    //
-    // getSchema() resolves types 2 & 3 afaict. type 1 needs to be resolved
-    // by this code.
-    //
-    // TODO it's not clear whether it is valid to replace the $ref with the
-    // fetched schema so as to avoid getSchema call in the future.
     if ('$ref' in schema) {
       const refSchema = this.getSchema(schema.$ref);
       if (!refSchema || !refSchema.schema) {
@@ -230,6 +184,47 @@ class Evaluator {
     }
 
     return this[method](args);
+  }
+
+  /**
+   * use ajv.getSchema to fetch a schema given a reference to the schema.
+   * the reference can be
+   * - uri-ref (from $id)
+   * - uri-ref#/json-pointer
+   * - #/json-pointer
+   * https://cswr.github.io/JsonSchema/spec/definitions_references/
+   */
+  getSchema(schema) {
+    // any truly remote reference that was required should have been fetched
+    // by ajv in order to validate, so using ajv.getSchema() should fetch from
+    // cache.
+
+    // consider:
+    // addressSchema defines {$defs: {street: {...}}}
+    // addressSchema references it: {streetAddress: {$ref: '#/$defs/street/}}
+    // userSchema has a reference to addressSchema: {address: {$ref: 'addressSchema#/streetAddress}}
+    //
+    // when userSchema references addressSchema#/streetAddress it loads {$ref: '#/$defs/street'}.
+    // when userSchema sees '#/$defs/street' it tries to dereference it as a *local* reference
+    // because it has lost the addressSchema context.
+    //
+    // so walk loaded $ref objects and convert relative references to absolute references so
+    // that ajv.getSchema() can resolve them.
+    //
+    const schemaValidationFunction = this.ajv.getSchema(schema);
+    if (!schemaValidationFunction) {
+      return undefined;
+    }
+
+    const schemaReference = schemaValidationFunction.schema;
+    for (const [object, key] of objectWalk(schemaReference)) {
+      // is it a relative reference in the context of the just loaded schema?
+      if (key === '$ref' && object[key][0] === '#') {
+        // it appears to be, make it an absolute reference.
+        object[key] = `${schema}${object[key]}`;
+      }
+    }
+    return schemaValidationFunction;
   }
 
   /*
