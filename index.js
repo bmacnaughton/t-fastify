@@ -1,5 +1,7 @@
 'use strict';
 
+/* eslint-disable no-console */
+
 const util = require('util');
 
 const fastify = require('fastify')({
@@ -29,14 +31,14 @@ ajv.addKeyword({
   //  dataCxt}
   // schema is the data being validated, data is the context it's being
   // validated within (instancePath, parentData, parentDataProperty, rootData)
-  validate (tagValue, data, schema, dataCxt) {
+  validate(tagValue, data, schema, dataCxt) {
     debugger
     console.log(`[CSI-TAGS: ${data} AGAINST ${fmt(tagValue)} FOR ${fmt(schema)}]`);
     // return boolean or promise if async
     return data.startsWith('bruce');
   },
   errors: false,
-})
+});
 
 function fmt(thing) {
   const options = {

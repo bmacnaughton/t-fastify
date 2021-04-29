@@ -6,7 +6,10 @@ const util = require('util');
 const fastDeepEqual = require('fast-deep-equal');
 const objectWalk = require('./object-walk');
 
+// https://json-schema.org/specification-links.html
 // https://tools.ietf.org/html/draft-handrews-json-schema-validation-01#page-13
+// TODO support 2019-09 https://json-schema.org/draft/2019-09/release-notes.html
+
 
 // eslint-disable-next-line no-unused-vars
 const keywords = {
@@ -41,19 +44,12 @@ const keywords = {
 };
 
 class Evaluator {
-  constructor(ajv, schema) {
+  constructor(ajv, schema, schemaObject) {
     this.ajv = ajv;
-    this.schema = schema;
+    this.schemaName = schema;
+    this.schema = schemaObject;
     this.path = [];
     // map each JSON Schema type to the method name for it
-    this.dispatch = new Map([
-      ['boolean', 'scalar'],
-      ['number', 'scalar'],
-      ['integer', 'scalar'],
-      ['string', 'string'],
-      ['array', 'array'],
-      ['object', 'object']
-    ]);
   }
 
   /**
@@ -84,6 +80,19 @@ class Evaluator {
     return this.eval(this.schema, target);
   }
 
+  /**
+   * eval is called for each schema when there is a target to be evaluated.
+   *
+   * when a schema has sub-schemas it recurses. all errors are returned in
+   * the normal return object with some information encoded.
+   *
+   * TODO - codify return object/array
+   *
+   *
+   * @param {object|boolean} schema - the schema to use for validation
+   * @param {any} target - the item the schema validates
+   * @returns {array} - return things
+   */
   eval(schema, target) {
     // this provides no validation of any sort; it either always passes
     // or always fails.
@@ -109,19 +118,21 @@ class Evaluator {
     // see if it's a reference. all the examples i can find show an object
     // with a single property, $ref, e.g., {$ref: 'reference'}
     // reference is one of these:
-    //  - #/json-pointer - reference to self
-    //  - uri-ref - reference that can be fetched, not necessarily http
-    //  - uri-ref#/json-pointer - reference to uri-ref
+    //  1) #/json-pointer - reference to self
+    //  2) uri-ref - reference that can be fetched, not necessarily http
+    //  3) uri-ref#/json-pointer - reference to uri-ref
     // https://cswr.github.io/JsonSchema/spec/definitions_references/
     //
-    // getSchema() resolves all forms of references afaict.
+    // getSchema() resolves types 2 & 3 afaict. type 1 needs to be resolved
+    // by this code.
+    //
     // TODO it's not clear whether it is valid to replace the $ref with the
-    // fetched schema.
+    // fetched schema so as to avoid getSchema call in the future.
     if ('$ref' in schema) {
       const refSchema = this.getSchema(schema.$ref);
       if (!refSchema || !refSchema.schema) {
         //  not sure how the validation could have succeeded, but
-        return ['?', '$ref: cannot resolve'];
+        return ['?', {error: `$ref: cannot resolve ${schema.$ref}`}];
       }
       // no push/pop because the target hasn't changed.
       return this.eval(refSchema.schema, target);
@@ -131,11 +142,10 @@ class Evaluator {
     // the schema is an object. this is the only valid type of schema other
     // than boolean, which unconditionally passes or fails.
     //
-    // possible types specified by the schema:
+    // possible types specified by the schema object:
     //  - null, boolean, object, array, number, integer, string
     //
     const {type} = schema;
-
 
     //
     // now both the target and the schema type have to be compatible.
@@ -146,11 +156,7 @@ class Evaluator {
     // if the target is a string then it must be evaluated against const, enum,
     // formats and keywords.
     //
-    // (NEXT MAYBE NOT, float and integer don't matter tag-wise)
-    // if the target is a number the schema must be checked to see if an integer
-    // was specified?
-    //
-    // if the target is a boolean, float, or integer then the schema doesn't
+    // if the target is a boolean, float, or number then the schema doesn't
     // matter. add the "alphanum" tag; if the value was a string and has been
     // coerced or was a natural boolean or number then it won't be tagged.
     //
@@ -158,7 +164,8 @@ class Evaluator {
       // TODO consider logging because this code should only be called if the
       // validation succeeded and yet this target is the wrong type. it must mean
       // that the logic behind this approach is flawed.
-      // (also, it could mean that coercion is active and the value was coerced.)
+      // (also, could it mean that coercion is active and the value was coerced?
+      // i don't think so because the uncoerced value would not be present.)
       return ['?', type];
     }
 
@@ -170,20 +177,21 @@ class Evaluator {
     let validator;
     let validations;
     // if both const and enum are present then const must be an element of
-    // enum or the validation would have failed. given the loose standard and
-    // the fact that const could a falsey value (i.e. null), check for the
-    // presence of enum and const as opposed to a truthy value.
-    if ('enum' in schema && Array.isArray(schema.enum)) {
-      validator = 'enum';
-      validations = schema.enum;
-    }
+    // enum or the validation would have failed. so if const is present, no
+    // need to check for enum.
+    //
+    // check for the presence of const because it could be falsey, e.g.,
+    // '' or null.
     if ('const' in schema) {
       validator = 'const';
       validations = [schema.const]; // make it the array it's sugar for
+    } else if (Array.isArray(schema.enum)) {
+      validator = 'enum';
+      validations = schema.enum;
     }
 
     // get the type-specific method to execute.
-    const method = this.dispatch.get(type);
+    const method = Evaluator.dispatch.get(type);
 
     if (!method) {
       debugger;
@@ -227,7 +235,10 @@ class Evaluator {
    * handle schema type array.
    */
   array({schema, target, validator, validations}) {
-    // validation impacting tagging keywords: items, additionalItems
+    // validation impacting tagging keywords: items, additionalItems.
+    // contains could be relevant but requires finding which items match
+    // the contains schema.
+    // TODO keyword contains
     if (validator) {
       return [null, `array:${validator} (TODO - walk array)`];
     }
@@ -250,7 +261,6 @@ class Evaluator {
       }
       return ['?', 'array:(applied items schema)'];
     }
-
 
     // items is an array of schema by which the first items.length elements
     // are evaluated.
@@ -290,7 +300,11 @@ class Evaluator {
    */
   object({schema, target, validator, validations}) {
     // TODO how to custom keywords? either attach property to return
-    // value or use async context.
+    // value or use async context. possibly attach symbol property to validated
+    // string or object? probably cheaper than async context.
+    // TODO handle pattern properties (probably should cache regexes)
+    // TODO handle additionalProperties (not in properties or patternProperties)
+    // TODO handle dependencies
     // TODO handle IF/THEN/ELSE and allOf/anyOf/oneOf
     //
     // if enum and properties exist then properties takes precedence if a prop
@@ -299,7 +313,7 @@ class Evaluator {
     // (if any). if it doesn't appear in properties AND there is an enum then the
     // entire object is trusted (because it passed an enum).
     //
-    // draft 2019-09 definitions => $defs
+    // draft 2019-09 definitions => $defs (but much bigger changes too)
     const {definitions, properties} = schema;
 
     // the id isn't important - we'll use getSchema() to fetch any schemas. but
@@ -413,20 +427,31 @@ class Evaluator {
   // this function becomes the tagging/tracking function
   //
   action(result, n) {
-    const [tag, type, ...rest] = result;
-    if (rest.length) {
-      throw new Error('found more result than expected');
-    }
+    const [tag, status] = result;
+    const type = status.error || status;
     const prefix = `${' '.repeat(2 * n)}\u2192`;
     if (tag === null) {
       console.log(`${prefix} REMOVE TRACKING (<${tag}>/${type})`);
     } else if (tag === '?') {
+      if (status.error) {
+        console.log(`${prefix} '? ERROR (${status.error})`);
+      } else {
       console.log(`${prefix} ? NO CHANGE (${type})`);
+      }
     } else {
       console.log(`${prefix} ADD ${tag} (${type})`);
     }
   }
 }
+
+Evaluator.dispatch = new Map([
+  ['boolean', 'scalar'],
+  ['number', 'scalar'],
+  ['integer', 'scalar'],
+  ['string', 'string'],
+  ['array', 'array'],
+  ['object', 'object']
+]);
 
 module.exports = {
   Evaluator,

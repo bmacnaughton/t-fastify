@@ -17,13 +17,18 @@ const addressSchema = {
       minimum: 0, maximum: 100,
     },
     random0: false,
+    positive: {
+      type: 'integer',
+      minimum: 0, maximum: 99999
+    },
   },
   properties: {
     address: {
       type: 'object',
       properties: {
         address: {type: 'string'},
-        zip: {type: 'number'},
+        //zip: {type: 'number'},
+        zip: {$ref: '#/definitions/positive'}
       }
     }
   },
@@ -41,6 +46,9 @@ const looseAddressSchema = {
 // multiple unnamed schema throw - duplicate ID: ''
 const anonymousSchema = {
   type: 'object',
+  definitions: {
+
+  },
   properties: {
     splish: {type: 'string'},
     splash: {type: 'string'},
@@ -75,7 +83,8 @@ const anonymousSchema = {
       type: 'array',
       items: [{type: 'string'}, {type: 'number'}],
       additionalItems: {type: 'integer'},
-    }
+    },
+    aPointerRef: {$ref: 'addressSchema#/definitions/positive'},
   }
 };
 
@@ -299,11 +308,13 @@ for (const t of rdeTests) {
   }
   const name = schema || 'anonymous';
   console.log(`${bRed}[using ${name} to validate${clear} %o]`, data);
+  // getSchema() returns the validator function. the schema object is
+  // a property on the function.
   const validator = ajv.getSchema(schema);
-  const realSchema = validator.schema;
-  console.log(`${bBlue}schema ${name} is ${util.format(realSchema)}${clear}`);
+  const schemaObject = validator.schema;
+  console.log(`${bBlue}schema ${name} is ${util.format(schemaObject)}${clear}`);
   const validation = validator(data);
-  const evaluator = new Evaluator(ajv, realSchema);
+  const evaluator = new Evaluator(ajv, schema, schemaObject);
   evaluator.evaluate(data);
   console.log(`[validation ${validation ? 'passed' : 'failed'}]`);
   if (!validation) {
