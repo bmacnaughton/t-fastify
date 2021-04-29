@@ -1,3 +1,6 @@
+'use strict';
+
+/* eslint-disable */
 function validate17 (
   data,
   {instancePath = "", parentData, parentDataProperty, rootData = data} = {}

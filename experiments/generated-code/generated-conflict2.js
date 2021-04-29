@@ -1,4 +1,5 @@
 'use strict';
+/* eslint-disable */
 // generated from:
 /**
   const conflict2 = {
