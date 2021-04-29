@@ -295,6 +295,7 @@ const rdeTests = [
       3.141592654,
       42, 42, 42,
     ],
+    aPointerRef: 99887,
   }}
 ];
 

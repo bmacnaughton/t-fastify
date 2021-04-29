@@ -53,13 +53,38 @@ class Evaluator {
   }
 
   /**
-   * use ajv.getSchema to fetch a schema given the value of a $ref property.
+   * use ajv.getSchema to fetch a schema given the value of a property.
    */
   getSchema(schema) {
     // any truly remote reference that was required should have been fetched
     // by ajv in order to validate, so using ajv.getSchema() should fetch from
     // cache.
-    return this.ajv.getSchema(schema);
+
+    // consider:
+    // addressSchema defines {$defs: {street: {...}}}
+    // addressSchema references it: {streetAddress: {$ref: '#/$defs/street/}}
+    // userSchema has a reference to addressSchema: {address: {$ref: 'addressSchema#/streetAddress}}
+    //
+    // when userSchema references addressSchema#/streetAddress it loads {$ref: '#/$defs/street'}.
+    // when userSchema sees '#/$defs/street' it tries to dereference it as a *local* reference
+    // because it has lost the addressSchema context.
+    //
+    // so walk loaded $ref objects and convert relative references to absolute references so
+    // that ajv.getSchema() can resolve them.
+    //
+    const schemaValidationFunction = this.ajv.getSchema(schema);
+    if (!schemaValidationFunction) {
+      return undefined;
+    }
+    const schemaReference = schemaValidationFunction.schema;
+    for (const [object, key] of objectWalk(schemaReference)) {
+      // is it a relative reference in the context of the just loaded schema?
+      if (key === '$ref' && object[key][0] === '#') {
+        // yes, make it an absolute reference.
+        object[key] = `${schema}${object[key]}`;
+      }
+    }
+    return schemaValidationFunction;
   }
 
   /**
@@ -436,7 +461,7 @@ class Evaluator {
       if (status.error) {
         console.log(`${prefix} '? ERROR (${status.error})`);
       } else {
-      console.log(`${prefix} ? NO CHANGE (${type})`);
+        console.log(`${prefix} ? NO CHANGE (${type})`);
       }
     } else {
       console.log(`${prefix} ADD ${tag} (${type})`);
