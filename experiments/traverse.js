@@ -175,6 +175,16 @@ const simpleString = {
   type: 'string',
 };
 
+const arrayWithValidation = {
+  $id: 'arrayWithValidation',
+  type: 'array',
+  items: [
+    {type: 'string'}, {type: 'string'},
+  ],
+  //const: ['xyzzy', 123],
+  enum: [['a', 'b'], ['c', 'd']],
+};
+
 const withPatternProps = {
   $id: 'withPatternProps',
   type: 'object',
@@ -207,6 +217,7 @@ const schemas = {
   simpleNumber,
   simpleString,
   withPatternProps,
+  arrayWithValidation,
 };
 for (const schema in schemas) {
   console.log(`[adding schema ${schema}]`);
@@ -250,13 +261,18 @@ const schemaTests = [
   {schema: 'simpleNumber', data:
     12.3
   },
+  {
+    schema: 'arrayWithValidation',
+    dumpCode: false,
+    data: ['a', 'b'],
+  },
 ];
 
-let v;
-const skipSchemaTests = withPatternProps;
+// set to $id of schema to run a single test
+const onlySchemaTests = undefined;
 for (const t of schemaTests) {
-  if (skipSchemaTests && skipSchemaTests !== withPatternProps) {
-    console.log(`% skipping ${name}`);
+  if (onlySchemaTests && t.schema !== onlySchemaTests) {
+    console.log(`% skipping ${t.schema}`);
     continue;
   }
   const {schema, data, skip} = t;
@@ -269,16 +285,13 @@ for (const t of schemaTests) {
   const validatorFunc = ajv.getSchema(schema);
   //const result = ajv.validate(schema, data);
   const result = validatorFunc(data);
-  if (schema === 'x-withPatternProps') {
-    v = validatorFunc;
+  if (t.dumpCode) {
+    console.log(validatorFunc.toString());
   }
   console.log(`-> ${result ? 'passed' : 'failed'}`);
   if (!result) {
     console.log(`-> ${util.format(validatorFunc.errors)}`);
   }
-}
-if (v) {
-  console.log(v.toString());
 }
 
 // recursive descent evaluator tests
@@ -317,6 +330,7 @@ const rdeTests = [
     propX: 99,
     propY: 77,
   }},
+  {schema: 'arrayWithValidation', data: ['a', 'b']},
 ];
 
 const bRed = '\u001b[31;1m';

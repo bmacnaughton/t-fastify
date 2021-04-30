@@ -83,7 +83,7 @@ class Evaluator {
    * the normal return object with some information encoded.
    *
    * TODO - codify return object/array
-   *
+   * TODO - return object of all return values (only for testing/debugging)?
    *
    * @param {object|boolean} schema - the schema to use for validation
    * @param {any} target - the item the schema validates
@@ -98,7 +98,7 @@ class Evaluator {
     // if it's not an object then ajv should not have validated the schema, so
     // it's not clear how we got here.
     if (typeof schema !== 'object') {
-      return ['?', `(invalid: ${schema})`];
+      return ['?', {error: `invalid-schema: ${schema}`}];
     }
 
     // this is most likely less common than an object, but the test has to
@@ -108,7 +108,7 @@ class Evaluator {
     // schema, so just return the 'no modifications' question mark and the
     // non-conforming schema.
     if (Array.isArray(schema)) {
-      return ['?', `(invalid-schema: ${schema})`];
+      return ['?', {error: `invalid-schema: ${schema}`}];
     }
 
     // see if it's a reference. all the examples i can find show an object
@@ -151,7 +151,7 @@ class Evaluator {
       // that the logic behind this approach is flawed.
       // (also, could it mean that coercion is active and the value was coerced?
       // i don't think so because the uncoerced value would not be present.)
-      return ['?', type];
+      return ['?', {error: `types-not-compat: ${type} & ${util.format(target)}`}];
     }
 
     // arguments for schema-type specific method. type is needed because all
@@ -182,6 +182,8 @@ class Evaluator {
       debugger;
       // while developing throw; in production just return ['?', 'error']
       throw new Error(`Found ${type} when expecting valid schema type`);
+      // eslint-disable-next-line no-unreachable
+      return ['?', {error: `found ${type} when expected valid schema type`}];
     }
     // add validations if present.
     if (validations) {
@@ -265,8 +267,11 @@ class Evaluator {
     // contains could be relevant but requires finding which items match
     // the contains schema.
     // TODO keyword contains
+
+    // TODO - how do validators (enum, const) interact with array? by
+    // element or deep-equal?
     if (validator) {
-      return [null, `array:${validator} (TODO - walk array)`];
+      return this.enumerations({target, validator, validations});
     }
 
     const {items, additionalItems} = schema;
@@ -278,7 +283,7 @@ class Evaluator {
     }
 
     // if items is not an array then items is the schema by which all array
-    // elements are validated.
+    // elements are validated. additionalItems *must* be ignored.
     if (!Array.isArray(items)) {
       for (let i = 0; i < target.length; i++) {
         this.pathPush(i);
@@ -299,6 +304,9 @@ class Evaluator {
 
     // additionalItems, if present is either a schema for validating
     // additional items or an array of schemas for doing so.
+    // TODO strict mode complains if additional items is not the same
+    // length as items and minItems/maxItems is not specified. i'm not
+    // sure the relationship required
     if (!additionalItems || target.length <= max) {
       return ['?', 'array:(applied [items] schema)'];
     }
@@ -328,10 +336,10 @@ class Evaluator {
     // TODO how to custom keywords? either attach property to return
     // value or use async context. possibly attach symbol property to validated
     // string or object? probably cheaper than async context.
-    // TODO handle pattern properties (probably should cache regexes)
-    // TODO handle additionalProperties (not in properties or patternProperties)
     // TODO handle dependencies
     // TODO handle IF/THEN/ELSE and allOf/anyOf/oneOf
+    // TODO return array of processing done in this context, accumulate from
+    //   calls to this.eval().
     //
     // if enum and properties exist then properties takes precedence if a prop
     // appears in both. so when following path in object, check to see if it
@@ -437,7 +445,7 @@ class Evaluator {
     }
 
     if (!validated) {
-      return ['?', `${validator} failed validation: ${util.format(target)}`];
+      return ['?', {error: `${validator} failed validation: ${util.format(target)}`}];
     }
 
     // if one of the const/enum values resulted in the target being validated
