@@ -10,45 +10,16 @@ const objectWalk = require('./object-walk');
 // https://tools.ietf.org/html/draft-handrews-json-schema-validation-01#page-13
 // TODO support 2019-09 https://json-schema.org/draft/2019-09/release-notes.html
 
-// i don't think the keywords are needed but i'm going to leave them here
-// until i get through the code without needing them.
-// eslint-disable-next-line no-unused-vars
-const keywords = {
-  any: [
-    'type',         // string | atring[] enum: null, boolean, object, array, number, string, integer
-    'enum',         // any[]
-    'const',        // any
-    'definitions'   // object (not clear this can be anywhere but it appears so)
-  ],
-  numeric: ['multipleOf', 'maximum', 'exclusiveMaximum', 'minimum', 'exclusiveMinimum'],
-  string: ['maxLength', 'minLength', 'pattern'],
-  array: [
-    'items',
-    'additionalItems',
-    'maxItems',
-    'minItems',
-    'uniqueItems',
-    'contains'
-  ],
-  object: [
-    'maxProperties', 'minProperties',   // must be non-negative integer
-    'required',                         // must be array
-    'properties',                       // must be object. each value must be valid JSON Schema
-    'patternProperties',                // must be object. see 6.5.5 in draft-spec link
-    'additionalProperties',             // must be JSON Schema. see 6.5.6
-    'dependencies',                     // must be object. see 6.5.7
-    'propertyNames',                    // must be JSON Schema. see 6.5.8
-  ],
-  conditional: ['if', 'then', 'else'],
-  group: ['allOf', 'anyOf', 'oneOf', 'not'],
-  semantic: ['format'],
-};
-
 class Evaluator {
-  constructor(ajv, schema, schemaObject) {
+  constructor(ajv, schema, schemaObject, options = {}) {
     this.ajv = ajv;
     this.schemaName = schema;
     this.schema = schemaObject;
+    // these functions are called on eval enter and exit. for production
+    // they implement the tagging functions; for testing, verification.
+    this.enter = options.enter || (() => undefined);
+    this.exit = options.exit || (() => undefined);
+    // keep track of the path to the target.
     this.path = [];
 
     // used to avoid 1) recreating regexes and 2) relying on ajv's internal
@@ -60,7 +31,7 @@ class Evaluator {
 
   /**
    * this function returns the type of schema that was used to validate as
-   * well as the validator in the schema. in some cases it needs to do evaluation
+   * well as additional information. in some cases it needs to do evaluation
    * in order to determine which element of the schema resulted in the passing the
    * target value.
    *
@@ -70,7 +41,11 @@ class Evaluator {
    *
    * @param schema - the schema applicable to the target
    * @param target - the target to be checked against the schema
-   * @returns ['validation-type', 'validator']
+   * @returns [tag-info, additional-info]
+   *  tag-info - null if target matched a const or enum (implies remove-tracking)
+   *           - '?' if no useful information so no tag modifications
+   *           - 'tag' tag to be added (agent code decides whether to remove untrusted)
+   *  additional-info - 'explanatory-string' | {error: 'explanatory-message'}
    */
   evaluate(target) {
     return this.eval(this.schema, target);
@@ -119,8 +94,14 @@ class Evaluator {
         //  not sure how the validation could have succeeded, but
         return ['?', {error: `$ref: cannot resolve ${schema.$ref}`}];
       }
-      // no push/pop because the target hasn't changed.
-      return this.eval(refSchema.schema, target);
+      // no push/pop because the target hasn't changed, but want to record
+      // the flow of control.
+      this.enter(this, {message: `evaluating $ref: ${schema.$ref}`});
+      const result = this.eval(refSchema.schema, target);
+      result.message = 'evaluated $ref';
+      this.exit(this, result);
+      delete result.message;
+      return result;
     }
 
     //
@@ -266,10 +247,8 @@ class Evaluator {
     // validation impacting tagging keywords: items, additionalItems.
     // contains could be relevant but requires finding which items match
     // the contains schema.
-    // TODO keyword contains
+    // TODO keyword contains - probably low value, defer.
 
-    // TODO - how do validators (enum, const) interact with array? by
-    // element or deep-equal?
     if (validator) {
       return this.enumerations({target, validator, validations});
     }
@@ -304,9 +283,6 @@ class Evaluator {
 
     // additionalItems, if present is either a schema for validating
     // additional items or an array of schemas for doing so.
-    // TODO strict mode complains if additional items is not the same
-    // length as items and minItems/maxItems is not specified. i'm not
-    // sure the relationship required
     if (!additionalItems || target.length <= max) {
       return ['?', 'array:(applied [items] schema)'];
     }
@@ -334,12 +310,13 @@ class Evaluator {
    */
   object({schema, target, validator, validations}) {
     // TODO how to custom keywords? either attach property to return
-    // value or use async context. possibly attach symbol property to validated
-    // string or object? probably cheaper than async context.
-    // TODO handle dependencies
-    // TODO handle IF/THEN/ELSE and allOf/anyOf/oneOf
-    // TODO return array of processing done in this context, accumulate from
-    //   calls to this.eval().
+    //   value or use async context. possibly attach symbol property to validated
+    //   string or object? probably cheaper than async context.
+    // TODO keyword dependencies - complex, big change in 2019-09. defer.
+    // TODO strict mode complains if additional items is not the same
+    //   length as items and minItems/maxItems is not specified. i'm not
+    //   sure what relationship is required. defer.
+    // TODO handle IF/THEN/ELSE and allOf/anyOf/oneOf, deffer
     //
     // if enum and properties exist then properties takes precedence if a prop
     // appears in both. so when following path in object, check to see if it
@@ -365,8 +342,7 @@ class Evaluator {
     // only properties that are in the schema can possibly be validated, so don't
     // consider properties that exist in the target but not the schema.
     for (const prop in properties) {
-      // TODO - may need to check keywords patternProperties and additionalProperties
-      // and possibly dependencies in order to completely evaluate.
+      // TODO - may need to check dependencies to completely evaluate.
       //
       // if the property exists in the target then it might have been validated as
       // a string, an enum, or a const (or keyword or format).
@@ -383,7 +359,7 @@ class Evaluator {
     // and specifies a more restrictive schema, but that causes a strict
     // mode error and significantly complicates this logic, so defer it
     // until hopefully it's not an issue in the future because strict mode
-    // is "normal".
+    // becomes "normal".
     //
     // now do patternProperties. when ajv executes with {strict: 'log'} option
     // it logs what would be errors if {strict: true} or ignored if {strict: false}.
@@ -405,10 +381,10 @@ class Evaluator {
       }
     }
 
-    // now come additionalProperties
+    // now come additionalProperties. this schema is only used to validate
+    // properties that did not match either properties or patternPropertise.
     if (additionalProperties) {
       for (const prop in target) {
-        // only look at props not seen
         if (propsSeen.get(prop)) {
           continue;
         }
@@ -420,7 +396,7 @@ class Evaluator {
 
     // return something when an object is evaluated. this will not be used
     // because it's not possible to tag an object, but it assures that return
-    // values are a consistent format.
+    // values are a consistent format and can be used for testing.
     return ['?', '(evaluated-object)'];
   }
 
@@ -454,12 +430,12 @@ class Evaluator {
     // this will walk both objects and arrays.
     for (const [object, key] of objectWalk(target)) {
       if (typeof object[key] === 'string') {
-        this.action([null, `${validator}:${util.format(object)}[${key}]`]);
+        // push and pop so the validation is recorded.
+        this.pathPush(key);
+        this.pathPop([null, `${validator}:${util.format(object)}[${key}]`]);
       }
     }
     return ['?', 'enum:walked'];
-
-
   }
 
   /**
@@ -479,10 +455,20 @@ class Evaluator {
     return false;
   }
 
+  /**
+   * generator function to return schemas for each pattern that matches the
+   * specified property name. it caches the RegExp objects generated from the
+   * string-regex keys to avoid re-generating RegExp objects.
+   *
+   * @param {object} patternProps contains {[string-regex]: schema, ...}
+   * @param {string} prop the property name to be checked against the regexes
+   * @returns {object} schemas when pattern matches property name
+   */
   *matching(patternProps, prop) {
     for (const [key, value] of Object.entries(patternProps)) {
       let re = this.regexCache.get(key);
       if (re === null) {
+        // don't try to regenerate regex-strings that fail to compile.
         continue;
       }
       if (!re) {
@@ -502,37 +488,13 @@ class Evaluator {
 
   pathPush(prop) {
     this.path.push(prop);
-    const prefix = '\u2193'.repeat(this.path.length);
-    console.log(`${prefix} descending to ${this.path.join('.')}`);
+    this.enter(this, prop);
   }
 
   pathPop(result) {
-    const n = this.path.length;
-    const prefix = '\u2191'.repeat(n);
-    const from = n ? this.path.join('.') : 'hmmm.';
+    this.exit(this, result);
     this.path.pop();
-    this.action(result, n);
-    console.log(`${prefix} returning from ${from}`);
     return result;
-  }
-  //
-  // this function becomes the tagging/tracking function
-  //
-  action(result, n) {
-    const [tag, status] = result;
-    const type = status.error || status;
-    const prefix = `${' '.repeat(2 * n)}\u2192`;
-    if (tag === null) {
-      console.log(`${prefix} REMOVE TRACKING (<${tag}>/${type})`);
-    } else if (tag === '?') {
-      if (status.error) {
-        console.log(`${prefix} '? ERROR (${status.error})`);
-      } else {
-        console.log(`${prefix} ? NO CHANGE (${type})`);
-      }
-    } else {
-      console.log(`${prefix} ADD ${tag} (${type})`);
-    }
   }
 }
 
