@@ -353,6 +353,10 @@ const options = {
     const msg = result.message || 'returning from';
     action(result, n);
     console.log(`${prefix} ${msg} ${from}`);
+  },
+  passed(value, tag) {
+    console.log(`TAG ACTION: apply ${tag} to ${value}`);
+    return value;
   }
 };
 
@@ -373,8 +377,10 @@ for (const t of rdeTests) {
   const schemaObject = validator.schema;
   console.log(`${bBlue}schema ${name} is ${util.format(schemaObject)}${clear}`);
   const validation = validator(data);
+
+  // make our own function to walk the data and "tag" strings
   const evaluator = new Evaluator(ajv, schema, schemaObject, options);
-  evaluator.evaluate(data);
+  evaluator.evaluate({}, 'req', data);
   console.log(`[schema validation ${validation ? 'passed' : 'failed'}]`);
   if (!validation) {
     util.format(`-> ${validator.errors}`);
@@ -385,19 +391,25 @@ for (const t of rdeTests) {
 // this function becomes the tagging/tracking function
 //
 function action(result, n) {
-  const [tag, status] = result;
-  const type = status.error || status;
+  const {type} = result;
   const prefix = `${' '.repeat(2 * n)}\u2192`;
-  if (tag === null) {
-    console.log(`${prefix} REMOVE TRACKING (<${tag}>/${type})`);
-  } else if (tag === '?') {
-    if (status.error) {
-      console.log(`${prefix} '? ERROR (${status.error})`);
-    } else {
-      console.log(`${prefix} ? NO CHANGE (${type})`);
+
+  switch (type) {
+    case 'value': {
+      const {tag, message} = result;
+      console.log(`${prefix} TAG: ${tag}, ${message}`);
     }
-  } else {
-    console.log(`${prefix} ADD ${tag} (${type})`);
+      break;
+    case 'error': {
+      const {message} = result;
+      console.log(`${prefix} ? ERROR ${message}`);
+    }
+      break
+    case 'info': {
+      const {message} = result;
+      console.log(`${prefix} [ INFO ${message}`);
+    }
+      break;
   }
 }
 
