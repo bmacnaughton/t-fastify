@@ -11,6 +11,16 @@ const objectWalk = require('./object-walk');
 // TODO support 2019-09 https://json-schema.org/draft/2019-09/release-notes.html
 
 class Evaluator {
+  /**
+   * @param {ajv} ajv instance
+   * @param {string} schema name of the schema being provided
+   * @param {object} schemaObject a JSON Schema object
+   * @param {object} options
+   * @param {function} options.enter called on eval entry
+   * @param {function} options.exit called on eval exit
+   * @param {function} options.info called with info in eval
+   * @param {function} options.passed called when a value has passed validation
+   */
   constructor(ajv, schema, schemaObject, options = {}) {
     this.ajv = ajv;
     this.schemaName = schema;
@@ -23,7 +33,9 @@ class Evaluator {
     // they implement the tagging functions; for testing, verification.
     this.enter = options.enter || (() => undefined);
     this.exit = options.exit || (() => undefined);
-    // this function is called when a value is returned after passing validation.
+    // this function is called to display information in the current eval.
+    this.info = options.info || (() => undefined);
+    // this function is called when a value has passed validation.
     this.passed = options.passed || ((result) => result.value);
 
     // used to avoid 1) recreating regexes and 2) relying on ajv's internal
@@ -43,13 +55,9 @@ class Evaluator {
    * in any way or because the checks that were in place don't check anything
    * that matters from a security perspective.
    *
-   * @param schema - the schema applicable to the target
-   * @param target - the target to be checked against the schema
-   * @returns [tag-info, additional-info]
-   *  tag-info - null if target matched a const or enum (implies remove-tracking)
-   *           - '?' if no useful information so no tag modifications
-   *           - 'tag' tag to be added (agent code decides whether to remove untrusted)
-   *  additional-info - 'explanatory-string' | {error: 'explanatory-message'}
+   * @param {object|boolean} schema the schema applicable to the target
+   * @param {any} target the target to be checked against the schema
+   * @return {message} {type: value|error|info|ref, type-specific-props}
    */
   evaluate(object, key, target) {
     const result = this.eval(this.schema, target);
@@ -69,14 +77,18 @@ class Evaluator {
 
   /**
    * recurse a deeper level into target
+   * @param {schema} schema JSON Schema
+   * @param {object} target the container in which prop is located
+   * @param {string} prop the prop
    */
   evalInto(schema, target, prop) {
     this.pathPush(prop);
     const result = this.eval(schema, target[prop]);
+    // if target[prop] is a primitive, eval() returns a type: 'value' message.
     if (result.type === 'value') {
       // is result.value needed? this implies that container[prop] is the
       // value.
-      target[prop] = this.passed(result.value, result.tag);
+      target[prop] = this.passed(target[prop], result.tag);
     }
     this.pathPop(result);
     return result;
@@ -88,28 +100,27 @@ class Evaluator {
    * when a schema has sub-schemas it recurses. all errors are returned in
    * the normal return object with some information encoded.
    *
-   * TODO - codify return object/array
    * TODO - return object of all return values (only for testing/debugging)?
    *
-   * @param {object|boolean} schema - the schema to use for validation
-   * @param {any} target - the item the schema validates
+   * @param {object|boolean} schema - the JSON Schema to use for validation
+   * @param {any} target - the item the schema applies to
    * @returns {object} {type: value|error|info, ...variant-properties}
-   *   eval returns an object of type 'value', 'error', or 'info'.
+   *   eval returns an object of type 'value', 'error', 'info', or 'ref'.
    *   {type: 'value', tag: 'tag'|null, value: string|string-object}
    *   {type: 'error', message: 'message'}
    *   {type: 'info', message: 'message'}
+   *   {type: 'ref', message: 'message'}
    *
-   *   when a type value is returned the callback, this.passed() will be called with
-   *   the value and the return value from this.passed() will replace the existing
-   *   value in the object/array. this.passed() should return the original value if
-   *   no change is desired.
+   *   when a type value is returned, this.passed() will be called with the value
+   *   and the return value from this.passed() will replace the existing value in
+   *   the object/array. this.passed() should return the original value if no
+   *   change is desired.
    *
    *   type 'error' is returned when an inconsistency is detected that should not
    *   happen, e.g., the schema is not valid or a value does not satisfy constraints.
    *
    *   type 'info' is returned when eval processed an array/object and there is not a
    *   value associated with it.
-   *
    */
   eval(schema, target) {
     // this provides no validation of any sort; it either always passes
@@ -139,18 +150,11 @@ class Evaluator {
       const refSchema = this.getSchema(schema.$ref);
       if (!refSchema || !refSchema.schema) {
         //  not sure how the validation could have succeeded, but
-        return this.errorReturn(`$ref: cannot resolve ${schema.$ref}`)
+        return this.errorReturn(`$ref: cannot resolve ${schema.$ref}`);
       }
       // do not evalInto() because the target hasn't changed; just the schema.
-      //
-      // TODO how to handle primitive here - need multiple levels of message?
-      // no push/pop because the target hasn't changed, but want to record
-      // the flow of control.
-      this.enter(this, {message: `evaluating $ref: ${schema.$ref}`});
+      this.info(this.refMessage(`fetched $ref: ${schema.$ref}`));
       const result = this.eval(refSchema.schema, target);
-      result.message = 'evaluated $ref';
-      this.exit(this, result);
-      delete result.message;
       return result;
     }
 
@@ -182,7 +186,7 @@ class Evaluator {
       // that the logic behind this approach is flawed.
       // (also, could it mean that coercion is active and the value was coerced?
       // i don't think so because the uncoerced value would not be present.)
-      return this.returnError(`types-not-compat: ${type} & ${util.format(target)}`);
+      return this.errorReturn(`types-not-compat: ${type} & ${util.format(target)}`);
     }
 
     // arguments for schema-type specific method. type is needed because all
@@ -210,7 +214,6 @@ class Evaluator {
     const entry = Evaluator.dispatch.get(type);
 
     if (!entry) {
-      debugger;
       // while developing throw; in production just return this.errorReturn()
       throw new Error(`Found ${type} when expecting valid schema type`);
       // eslint-disable-next-line no-unreachable
@@ -318,12 +321,6 @@ class Evaluator {
     if (!Array.isArray(items)) {
       for (let i = 0; i < target.length; i++) {
         this.evalInto(items, target, i);
-        //this.pathPush(i);
-        //const result = this.eval(items, target[i]);
-        //if (result.value) {
-        //  target[i] = this.passed(result);
-        //}
-        //this.pathPop(result);
       }
       return this.infoReturn('array:items-schema');
     }
@@ -333,9 +330,6 @@ class Evaluator {
     const max = target.length > items.length ? items.length : target.length;
     for (let i = 0; i < max; i++) {
       this.evalInto(items[i], target, i);
-      //this.pathPush(i);
-      //const result = this.eval(items[i], target[i]);
-      //this.pathPop(result);
     }
 
     // additionalItems, if present is either a schema for validating
@@ -355,10 +349,6 @@ class Evaluator {
 
     for (let i = max; i < nextMax; i++) {
       this.evalInto(isArray ? additionalItems[i] : additionalItems, target, i);
-      //this.pathPush(i);
-      //const item = isArray ? additionalItems[i] : additionalItems;
-      //const result = this.eval(item, target[i]);
-      //this.pathPop(result);
     }
     return this.infoReturn('array:additionalItems');
   }
@@ -369,7 +359,9 @@ class Evaluator {
   object({schema, target, validator, validations}) {
     // TODO how to custom keywords? either attach property to return
     //   value or use async context. possibly attach symbol property to validated
-    //   string or object? probably cheaper than async context.
+    //   string or object? probably cheaper than async context. OR just
+    //   tag the string in the keyword code (if our custom keyword) and
+    //   check for the presence of that special tag here.
     // TODO keyword dependencies - complex, big change in 2019-09. defer.
     // TODO strict mode complains if additional items is not the same
     //   length as items and minItems/maxItems is not specified. i'm not
@@ -406,10 +398,6 @@ class Evaluator {
       // a string, an enum, or a const (or keyword or format).
       if (prop in target) {
         this.evalInto(properties[prop], target, prop);
-        //this.pathPush(prop);
-        //const result = this.eval(properties[prop], target[prop]);
-        //this.pathPop(result);
-        // add to properties seen
         propsSeen.set(prop, true);
       }
     }
@@ -432,10 +420,6 @@ class Evaluator {
         }
         for (const schema of this.matching(patternProperties, prop)) {
           this.evalInto(schema, target, prop);
-          //this.pathPush(prop);
-          //const result = this.eval(schema, target[prop]);
-          //this.pathPop(result);
-          // add to properties seen
           propsSeen.set(prop, true);
         }
       }
@@ -449,15 +433,9 @@ class Evaluator {
           continue;
         }
         this.evalInto(additionalProperties, target, prop);
-        //this.pathPush(prop);
-        //const result = this.eval(additionalProperties, target[prop]);
-        //this.pathPop(result);
       }
     }
 
-    // return something when an object is evaluated. this will not be used
-    // because it's not possible to tag an object, but it assures that return
-    // values are a consistent format and can be used for testing.
     return this.infoReturn('object:evaluated');
   }
 
@@ -493,7 +471,7 @@ class Evaluator {
       if (typeof object[key] === 'string') {
         // push and pop so the validation context is reported. because there is
         // not really a schema (it matched a const/enum) this.passed() is called
-        // directly.
+        // directly (as opposed to recursing).
         this.pathPush(key);
         // parallel handling a return value by passing value and tag
         object[key] = this.passed(object[key], null);
@@ -510,10 +488,10 @@ class Evaluator {
     if (type === typeof target) {
       return true;
     }
-    if (!(type === 'integer' && typeof target === 'number')) {
+    if (type === 'integer' && typeof target === 'number') {
       return true;
     }
-    if (!(type === 'array' && Array.isArray(target))) {
+    if (type === 'array' && Array.isArray(target)) {
       return true;
     }
 
@@ -553,11 +531,11 @@ class Evaluator {
 
   pathPush(prop) {
     this.path.push(prop);
-    this.enter(this, prop);
+    this.enter(prop);
   }
 
   pathPop(result) {
-    this.exit(this, result);
+    this.exit(result);
     this.path.pop();
     return result;
   }
@@ -573,14 +551,18 @@ class Evaluator {
   errorReturn(message) {
     return {type: 'error', message};
   }
+
+  refMessage(message) {
+    return {type: 'ref', message};
+  }
 }
 
 // map each JSON Schema type to the method name for it
 Evaluator.dispatch = new Map([
-  ['boolean', {method: 'scalar', primitive: true}],
-  ['number', {method: 'scalar', primitive: true}],
-  ['integer', {method: 'scalar', primitive: true}],
-  ['string', {method: 'string', primitive: true}],
+  ['boolean', {method: 'scalar'}],
+  ['number', {method: 'scalar'}],
+  ['integer', {method: 'scalar'}],
+  ['string', {method: 'string'}],
   ['array', {method: 'array'}],
   ['object', {method: 'object'}]
 ]);

@@ -338,24 +338,40 @@ const bBlue = '\u001b[34;1m';
 const clear = '\u001b[0m';
 
 const options = {
-  enter(evaluator, prop) {
+  enter(prop) {
     const prefix = '\u2193'.repeat(this.path.length);
     let msg = 'descending to';
-    if (typeof prop === 'object') {
+    // now this is only used for $refs.
+    if (typeof prop === 'object' && prop.type === 'ref') {
       msg = prop.message;
     }
     console.log(`${prefix} ${msg} ${this.path.join('.')}`);
   },
-  exit(evaluator, result) {
+  exit(result) {
     const n = this.path.length;
     const prefix = '\u2191'.repeat(n);
     const from = n ? this.path.join('.') : 'hmmm.';
-    const msg = result.message || 'returning from';
+    let msg = 'returning from';
+    if (result.type === 'ref') {
+      msg = result.message;
+    }
     action(result, n);
     console.log(`${prefix} ${msg} ${from}`);
   },
+  info(message) {
+    const n = this.path.length;
+    const prefix = `${' '.repeat(n + 2)}\u2192`;
+    console.log(`${prefix} [INFO] ${message.message}`);
+  },
   passed(value, tag) {
-    console.log(`TAG ACTION: apply ${tag} to ${value}`);
+    let display = value;
+    if (typeof value === 'string') {
+      display = `"${value}"`;
+    }
+    // get the depth
+    const n = this.path.length;
+    const prefix = `${' '.repeat(n + 2)}\u2192`;
+    console.log(`${prefix} PASSED: apply "${tag}" to ${display}`);
     return value;
   }
 };
@@ -392,24 +408,26 @@ for (const t of rdeTests) {
 //
 function action(result, n) {
   const {type} = result;
-  const prefix = `${' '.repeat(2 * n)}\u2192`;
+  const prefix = `${' '.repeat(n + 2)}\u2192`;
 
   switch (type) {
     case 'value': {
       const {tag, message} = result;
-      console.log(`${prefix} TAG: ${tag}, ${message}`);
-    }
+      console.log(`${prefix} ACTION-VALUE: ${tag}, ${message}`);
       break;
+    }
     case 'error': {
       const {message} = result;
       console.log(`${prefix} ? ERROR ${message}`);
+      break;
     }
-      break
     case 'info': {
       const {message} = result;
       console.log(`${prefix} [ INFO ${message}`);
-    }
       break;
+    }
+    default:
+      throw new Error(`found ${type} when expected valid message type`);
   }
 }
 
