@@ -363,6 +363,17 @@ const options = {
     const prefix = `${' '.repeat(n + 2)}\u2192`;
     console.log(`${prefix} [INFO] ${message.message}`);
   },
+  /**
+   * this function implements tagging. when called it applies tag to value, if
+   * appropriate. tag is null when untrusted should be removed because value
+   * matched a const/enum value.
+   *
+   * the return value replaces the original value in its container (object,
+   * array), so this function must return the value whether it is tagged or not.
+   *
+   * otherwise the tag might need to be checked to determine what to do, e.g.,
+   * 'string-type-checked' is added to 'untrusted' but 'alphanum' replaces it.
+   */
   passed(value, tag) {
     let display = value;
     if (typeof value === 'string') {
@@ -403,9 +414,7 @@ for (const t of rdeTests) {
   }
 }
 
-//
-// this function becomes the tagging/tracking function
-//
+
 function action(result, n) {
   const {type} = result;
   const prefix = `${' '.repeat(n + 2)}\u2192`;
